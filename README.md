@@ -90,41 +90,76 @@ which hands it to nginx. Your home IP address is never published.
 
 ## Installation
 
-Full step-by-step instructions — including the sudoers rule and the tunnel
-config — are in **[docs/SETUP.md](docs/SETUP.md)**. The short version:
+### Automatic (recommended)
 
 ```bash
-# 1. Get the files
-cd ~ && git clone https://github.com/<you>/proxdeploy.git
+cd ~
+git clone https://github.com/<you>/proxdeploy.git
 cd proxdeploy
-
-# 2. Virtual environment
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# 3. Configuration
-cp .env.example .env
-nano .env          # fill in SECRET_KEY, DOMAIN, DOMAINS, CF_API_TOKEN
-
-# 4. Passwordless sudo for the handful of commands ProxDeploy runs
-which nginx systemctl git chown rm     # use the REAL paths below
-sudo visudo -f /etc/sudoers.d/proxdeploy
-
-# 5. Run it as a service
-sudo cp proxdeploy.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now proxdeploy
-sudo systemctl status proxdeploy --no-pager
+./setup.sh
 ```
 
-Then add a tunnel ingress entry for the dashboard hostname pointing at
-`http://localhost:2096`, restart `cloudflared`, and open the dashboard in a
-browser. **On first visit you set the dashboard password** — it is bcrypt-hashed
-and stored in `config.json`, never in plaintext.
+`setup.sh` asks a handful of questions and does the rest:
+
+- **Checks prerequisites** — python, git, curl, nginx, cloudflared; offers to `apt install` what's missing
+- **Verifies your Cloudflare token** against the API before going any further
+- **Looks up your zone IDs automatically** — you type domain names, not hex strings
+- **Auto-detects your tunnel UUID** from `cloudflared tunnel list`
+- **Generates `SECRET_KEY` and `API_KEY`** for you and writes `.env` at mode `600`
+- **Builds the sudoers rule** from `which`-resolved paths, validates it with `visudo -c`, and refuses to install it if it doesn't parse
+- **Installs and starts the systemd service**, generated for your actual user and directory
+- **Adds tunnel ingress rules** for the dashboard and a `*.yourdomain` wildcard, keeping the `http_status:404` catch-all last
+- **Creates the dashboard's DNS record** via the Cloudflare API
+- **Sets up start-on-boot** (see below)
+
+Nothing is written to your system until an explicit confirmation prompt, every
+file it replaces is backed up as `*.bak-<timestamp>`, and it's safe to re-run —
+it detects an existing `.env` and won't clobber it without asking.
+
+The only thing left afterwards is opening the dashboard and setting your
+password.
+
+### Manual
+
+If you'd rather do it by hand, or the script hits something unusual on your
+setup, **[docs/SETUP.md](docs/SETUP.md)** walks through every step individually.
 
 > A wildcard ingress rule (`*.example.com`) means new subdomains never need a
 > tunnel change again — only nginx and DNS, both of which ProxDeploy handles.
+
+### Surviving reboots and power cuts
+
+The installer offers to enable start-on-boot, which covers all three pieces —
+losing any one of them leaves your sites dark:
+
+| Unit | Why it matters |
+|---|---|
+| `proxdeploy` | The dashboard and API |
+| `nginx` | Actually serves every site |
+| `cloudflared` | The only route in from the internet |
+
+On a re-run it also reads `config.json` and offers to enable the systemd units
+belonging to your **deployed sites** — otherwise the dashboard returns after a
+reboot but the apps behind it don't, and every dynamic site 502s. It warns about
+any unit sitting in a `failed` state, since an enabled-but-failing unit is one
+reboot away from silent breakage.
+
+The service unit itself is written for unattended recovery:
+
+- `Restart=always` with `RestartSec=5` — crashes come back on their own
+- `StartLimitIntervalSec=0` — systemd's default gives up after 5 restarts in 10
+  seconds and leaves the unit dead. After a power cut, when the app may lose
+  several races against a not-yet-ready network, that default is exactly wrong.
+- `After=network-online.target` — so the first deploy after boot has working DNS
+
+Worth testing once, deliberately:
+
+```bash
+sudo reboot
+# then, once it's back:
+systemctl is-enabled proxdeploy nginx cloudflared   # 3x "enabled"
+systemctl is-active  proxdeploy nginx cloudflared   # 3x "active"
+```
 
 ---
 

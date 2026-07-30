@@ -1,6 +1,13 @@
 [Unit]
 Description=ProxDeploy — Homelab Deploy Dashboard
-After=network.target
+# Cloudflare API calls need DNS up. The dashboard itself only binds localhost,
+# so this is about the first deploy after a reboot, not about starting at all.
+After=network-online.target
+Wants=network-online.target
+# Never stop retrying. The default rate limiter gives up after 5 restarts in
+# 10s and leaves the unit dead — exactly the wrong behaviour after a power cut,
+# when the app may lose several races against the network before settling.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

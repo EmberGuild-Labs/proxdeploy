@@ -1,5 +1,13 @@
 # ProxDeploy — Setup Guide
 
+> **Most people should just run `./setup.sh`.** It does everything in this
+> document interactively — verifies your Cloudflare token, looks up zone IDs
+> from domain names, generates your keys, validates the sudoers rule before
+> installing it, edits the tunnel ingress, and sets up start-on-boot. It backs
+> up every file it replaces and is safe to re-run.
+>
+> This guide is for doing it by hand, or for understanding what the script did.
+
 Step by step, start to finish. Do these in order and check each one worked
 before moving on — a mistake in step 4 is much easier to find if steps 1–3 are
 known good.
@@ -163,6 +171,54 @@ sudo journalctl -u proxdeploy -n 30 --no-pager
 
 The usual cause is a path in `proxdeploy.service` not matching where the files
 actually are.
+
+### Making sure it comes back after a power cut
+
+`systemctl enable` above handles ProxDeploy itself, but your sites need all
+three of these enabled — miss one and everything stays dark after a reboot:
+
+```bash
+sudo systemctl enable proxdeploy nginx cloudflared
+systemctl is-enabled proxdeploy nginx cloudflared    # want 3x "enabled"
+```
+
+Every **dynamic site** you later deploy runs its own systemd unit, and those
+need enabling too. Otherwise the dashboard returns after a reboot but the apps
+behind it don't, and each one 502s:
+
+```bash
+sudo systemctl enable yoursite.service
+```
+
+Two things in the shipped unit file exist specifically for unattended recovery:
+
+- **`StartLimitIntervalSec=0`** — systemd's default rate limiter gives up after
+  5 restarts in 10 seconds and leaves the unit `failed`. After a power cut, when
+  the app may lose several races against a network that isn't ready yet, that
+  default is precisely the wrong behaviour. This disables it, so `Restart=always`
+  really does mean always.
+- **`After=network-online.target`** — the dashboard only binds localhost, so it
+  doesn't strictly need the network to start; this is so the first *deploy*
+  after a reboot has working DNS for the Cloudflare API.
+
+Also check nothing is sitting broken:
+
+```bash
+systemctl list-units --state=failed
+```
+
+An enabled-but-failing unit is one reboot away from a problem you won't notice
+until you go looking. A classic on a Pi that once had Apache installed:
+`apache2.service` enabled at boot, silently losing the fight for port 80 against
+nginx. If you see it, `sudo systemctl disable --now apache2`.
+
+**Test it once, deliberately**, while you still remember how it was set up:
+
+```bash
+sudo reboot
+# once it's back:
+systemctl is-active proxdeploy nginx cloudflared
+```
 
 ---
 
