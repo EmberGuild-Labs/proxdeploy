@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ProxDeploy — Login</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0b0e14;
+    --surface:  #121620;
+    --border:   #1e2535;
+    --ember:    #f97316;
+    --ember-dim:#7c3a0e;
+    --text:     #e2e8f0;
+    --muted:    #64748b;
+    --green:    #22c55e;
+    --red:      #ef4444;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Subtle grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 40px 40px;
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  /* Ember glow */
+  body::after {
+    content: '';
+    position: fixed;
+    top: -20%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 600px;
+    height: 400px;
+    background: radial-gradient(ellipse, rgba(249,115,22,0.12) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 48px 40px;
+    width: 100%;
+    max-width: 400px;
+    position: relative;
+    z-index: 1;
+    box-shadow: 0 0 60px rgba(249,115,22,0.05), 0 20px 40px rgba(0,0,0,0.4);
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 32px;
+  }
+
+  .logo-icon {
+    width: 36px;
+    height: 36px;
+    background: var(--ember);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 16px;
+    color: #fff;
+  }
+
+  .logo-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 18px;
+    color: var(--text);
+    letter-spacing: -0.5px;
+  }
+
+  .logo-text span { color: var(--ember); }
+
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 32px;
+  }
+
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    margin-bottom: 8px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+
+  input[type="password"] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    outline: none;
+    transition: border-color 0.2s;
+    margin-bottom: 20px;
+  }
+
+  input[type="password"]:focus { border-color: var(--ember); }
+
+  .btn {
+    width: 100%;
+    background: var(--ember);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 13px;
+    font-family: 'Inter', sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+  }
+
+  .btn:hover { background: #ea6a0a; }
+  .btn:active { transform: scale(0.98); }
+
+  .error {
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.3);
+    border-radius: 8px;
+    padding: 12px 14px;
+    color: var(--red);
+    font-size: 14px;
+    margin-bottom: 20px;
+  }
+
+  .first-time-note {
+    background: rgba(249,115,22,0.08);
+    border: 1px solid rgba(249,115,22,0.2);
+    border-radius: 8px;
+    padding: 12px 14px;
+    color: var(--ember);
+    font-size: 13px;
+    margin-bottom: 20px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">P</div>
+    <div class="logo-text">Prox<span>Deploy</span></div>
+  </div>
+
+  <h1>{% if first_time %}Set your password{% else %}Welcome back{% endif %}</h1>
+  <p class="subtitle">
+    {% if first_time %}
+      First run — choose a strong password for this dashboard.
+    {% else %}
+      Enter your password to access the deploy dashboard.
+    {% endif %}
+  </p>
+
+  {% if first_time %}
+  <div class="first-time-note">
+    This password is hashed and stored locally. Pick something strong — you only set it once here.
+  </div>
+  {% endif %}
+
+  {% if error %}
+  <div class="error">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST">
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autofocus placeholder="••••••••••••">
+    <button type="submit" class="btn">
+      {% if first_time %}Set Password & Enter{% else %}Sign In{% endif %}
+    </button>
+  </form>
+</div>
+</body>
+</html>

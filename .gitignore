@@ -1,0 +1,31 @@
+# ── Secrets — never commit these ──────────────────────────────────────────────
+.env
+*.env
+!.env.example
+
+# config.json holds the bcrypt password hash and every deployed site's
+# metadata (repo URLs, ports, Cloudflare record IDs). It is generated at
+# runtime and is NOT part of the project.
+config.json
+config.json.tmp
+
+# The CLI's local credential file, if anyone ever copies it in here
+.proxdeploy
+
+# ── Runtime state ─────────────────────────────────────────────────────────────
+logs/
+services/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ── OS / editor cruft ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

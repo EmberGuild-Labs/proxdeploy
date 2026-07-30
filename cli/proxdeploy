@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""proxdeploy — CLI for a self-hosted ProxDeploy dashboard."""
+
+import os
+import sys
+import json
+import subprocess
+import configparser
+from pathlib import Path
+
+CONFIG_PATH = Path.home() / ".proxdeploy"
+
+HELP = """proxdeploy — manage your homelab sites from the terminal
+
+Usage:
+  proxdeploy status                              list all deployed sites
+  proxdeploy domains                             list domains available to deploy to
+  proxdeploy sysinfo                             show Pi CPU and RAM usage
+  proxdeploy deploy <repo_url> <subdomain>       deploy a new site
+  proxdeploy deploy <repo_url> <subdomain> <port>  deploy a dynamic (reverse-proxy) site
+  proxdeploy update  <site>                      git pull + nginx reload
+  proxdeploy restart <site>                      reload nginx (+ restart systemd service if set)
+  proxdeploy delete  <site>                      remove site, nginx config, DNS record
+  proxdeploy logs    <site>                      show last 200 log lines
+  proxdeploy logs    <site> --errors             show errors/warnings only
+  proxdeploy setup                               (re)configure SSH credentials and API key
+
+Deploying to a second domain:
+  add --domain <example.com> to `deploy`, and use '@' as the subdomain to
+  deploy that domain's landing page (its root).
+
+  proxdeploy deploy <repo> blog --domain example.org    -> blog.example.org
+  proxdeploy deploy <repo> @    --domain example.org    -> example.org
+
+<site> is the bare name for sites on the default domain and the full hostname
+for everything else — `proxdeploy status` shows the exact name to use in the
+SITE column.
+"""
+
+
+def load_config():
+    if not CONFIG_PATH.exists():
+        print("proxdeploy: no config found. Run: proxdeploy setup")
+        sys.exit(1)
+    cfg = configparser.ConfigParser()
+    cfg.read(CONFIG_PATH)
+    if "proxdeploy" not in cfg:
+        print("proxdeploy: config missing [proxdeploy] section. Run: proxdeploy setup")
+        sys.exit(1)
+    return cfg["proxdeploy"]
+
+
+def ssh_api(cfg, method, path, payload=None):
+    """Call the ProxDeploy API via SSH (bypasses Cloudflare bot protection)."""
+    host = cfg.get("ssh_host", "raspberrypi")
+    user = cfg.get("ssh_user", "pi")
+    password = cfg.get("ssh_password", "")
+    api_key = cfg["api_key"]
+    port = cfg.get("ssh_port", "22")
+
+    data_flag = ""
+    if payload is not None:
+        escaped = json.dumps(payload).replace("'", "'\\''")
+        data_flag = f"-d '{escaped}'"
+
+    curl_cmd = (
+        f"curl -s -X {method.upper()} "
+        f"-H 'X-API-Key: {api_key}' "
+        f"-H 'Content-Type: application/json' "
+        f"{data_flag} "
+        f"http://localhost:2096{path}"
+    )
+
+    # Use sshpass if a password is configured, otherwise rely on key-based auth
+    if password:
+        ssh_cmd = [
+            "sshpass", f"-p{password}",
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            "-p", port,
+            f"{user}@{host}",
+            curl_cmd,
+        ]
+    else:
+        ssh_cmd = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            "-p", port,
+            f"{user}@{host}",
+            curl_cmd,
+        ]
+
+    try:
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=45)
+        if result.returncode != 0:
+            print(f"proxdeploy: SSH error — {result.stderr.strip()}")
+            sys.exit(1)
+        output = result.stdout.strip()
+        if not output:
+            print("proxdeploy: empty response from Pi")
+            sys.exit(1)
+        return json.loads(output)
+    except FileNotFoundError as e:
+        missing = "sshpass" if "sshpass" in str(e) else "ssh"
+        print(f"proxdeploy: '{missing}' not found. Install it first.")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print(f"proxdeploy: unexpected response:\n{result.stdout[:500]}")
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print("proxdeploy: timed out waiting for Pi")
+        sys.exit(1)
+
+
+def cmd_status(args, cfg):
+    result = ssh_api(cfg, "GET", "/api/status")
+    if not result:
+        print("No services deployed.")
+        return
+    default_domain = cfg.get("default_domain", "")
+    col = max(22, max(len(n) for n in result))
+    print(f"  {'SITE':<{col}} {'STATUS':<12} URL")
+    print(f"  {'-'*col} {'-'*12} {'-'*32}")
+    for name, svc in sorted(result.items()):
+        status = svc.get("status", "unknown")
+        # The server resolves the hostname for us (older records have no
+        # domain field, so never rebuild it from the key here).
+        host = svc.get("fqdn") or (f"{name}.{default_domain}" if default_domain else name)
+        print(f"  {name:<{col}} {status:<12} https://{host}")
+
+
+def cmd_domains(args, cfg):
+    result = ssh_api(cfg, "GET", "/api/domains")
+    if not result:
+        return
+    print(f"  default: {result.get('default')}")
+    print()
+    for d in result.get("domains", []):
+        flags = []
+        if not d.get("zone_id"):
+            flags.append("NO ZONE ID — DNS disabled")
+        if not d.get("apex_ready"):
+            flags.append("no CF_TUNNEL_ID — can't deploy landing page")
+        note = ("  (" + "; ".join(flags) + ")") if flags else ""
+        print(f"  {d['name']}{note}")
+
+
+def cmd_deploy(args, cfg):
+    # proxdeploy deploy <repo> <subdomain|@> [port] [--domain X]
+    domain = None
+    rest = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--domain" and i + 1 < len(args):
+            domain = args[i + 1]
+            i += 2
+            continue
+        rest.append(args[i])
+        i += 1
+
+    if len(rest) < 2:
+        print("Usage: proxdeploy deploy <repo_url> <subdomain> [port] [--domain example.com]")
+        print("       use '@' as the subdomain to deploy the domain's landing page")
+        sys.exit(1)
+
+    # '@' is the apex; the server also accepts an empty string for it
+    subdomain = "" if rest[1] == "@" else rest[1]
+    payload = {"repo_url": rest[0], "subdomain": subdomain}
+    if domain:
+        payload["domain"] = domain
+    if len(rest) >= 3:
+        payload["port"] = rest[2]
+
+    result = ssh_api(cfg, "POST", "/api/deploy", payload)
+    if result.get("ok"):
+        print(result.get("message"))
+        # The log/site key is the bare name on the default domain, the full
+        # hostname elsewhere — mirror the server's rule so the hint is right.
+        default_domain = cfg.get("default_domain", "")
+        key = subdomain if not domain or domain == default_domain else \
+              (domain if not subdomain else f"{subdomain}.{domain}")
+        print(f"  Watch: proxdeploy logs {key}")
+    else:
+        print(f"Error: {result.get('error')}")
+        sys.exit(1)
+
+
+def cmd_update(args, cfg):
+    if not args:
+        print("Usage: proxdeploy update <subdomain>")
+        sys.exit(1)
+    result = ssh_api(cfg, "POST", "/api/update", {"subdomain": args[0]})
+    if result.get("ok"):
+        print(result.get("message"))
+    else:
+        print(f"Error: {result.get('error')}")
+        sys.exit(1)
+
+
+def cmd_delete(args, cfg):
+    if not args:
+        print("Usage: proxdeploy delete <subdomain>")
+        sys.exit(1)
+    confirm = input(f"Delete '{args[0]}' and remove all its files? [y/N] ").strip().lower()
+    if confirm != "y":
+        print("Aborted.")
+        return
+    result = ssh_api(cfg, "POST", "/api/delete", {"subdomain": args[0]})
+    if result.get("ok"):
+        print(result.get("message"))
+    else:
+        print(f"Error: {result.get('error')}")
+        sys.exit(1)
+
+
+def cmd_sysinfo(args, cfg):
+    d = ssh_api(cfg, "GET", "/api/sysinfo")
+
+    def bar(pct, width=20):
+        filled = round(pct / 100 * width)
+        return "█" * filled + "░" * (width - filled)
+
+    cpu = d["cpu_percent"]
+    ram_used  = d["ram_used_mb"]
+    ram_total = d["ram_total_mb"]
+    ram_pct   = d["ram_percent"]
+
+    cpu_warn = " (!)" if cpu >= 90 else " (↑)" if cpu >= 70 else ""
+    ram_warn = " (!)" if ram_pct >= 90 else " (↑)" if ram_pct >= 75 else ""
+
+    print(f"  CPU  {bar(cpu)}  {cpu:.1f}%{cpu_warn}")
+    print(f"  RAM  {bar(ram_pct)}  {ram_used} / {ram_total} MB  ({ram_pct:.1f}%){ram_warn}")
+
+
+def cmd_restart(args, cfg):
+    if not args:
+        print("Usage: proxdeploy restart <subdomain>")
+        sys.exit(1)
+    result = ssh_api(cfg, "POST", "/api/restart", {"subdomain": args[0]})
+    if result.get("ok"):
+        print(result.get("message"))
+    else:
+        print(f"Error: {result.get('error')}")
+        sys.exit(1)
+
+
+def cmd_logs(args, cfg):
+    if not args:
+        print("Usage: proxdeploy logs <subdomain> [--errors]")
+        sys.exit(1)
+    result = ssh_api(cfg, "GET", f"/api/logs/{args[0]}")
+    key = "errors" if "--errors" in args else "all"
+    lines = result.get(key, [])
+    if not lines:
+        print("(no log entries)")
+        return
+    for line in lines:
+        print(line, end="")
+
+
+def cmd_setup(_args):
+    print("proxdeploy setup\n")
+
+    existing = configparser.ConfigParser()
+    if CONFIG_PATH.exists():
+        existing.read(CONFIG_PATH)
+
+    def prompt(label, key, default="", secret=False):
+        cur = existing.get("proxdeploy", key, fallback=default)
+        display = f"{cur[:4]}..." if (secret and cur) else cur
+        hint = f" [{display}]" if cur else ""
+        val = input(f"{label}{hint}: ").strip()
+        return val or cur
+
+    ssh_host = prompt("Pi hostname or IP", "ssh_host", "raspberrypi")
+    ssh_user = prompt("Pi SSH user", "ssh_user", "pi")
+    ssh_password = prompt("Pi SSH password (leave blank to use SSH key)", "ssh_password", secret=True)
+    ssh_port = prompt("Pi SSH port", "ssh_port", "22")
+    default_domain = prompt("Default domain (must match DOMAIN in the server .env)",
+                            "default_domain", "example.com")
+    api_key = prompt("ProxDeploy API key", "api_key", secret=True)
+
+    if not api_key:
+        print("API key is required.")
+        sys.exit(1)
+
+    cfg = configparser.ConfigParser()
+    cfg["proxdeploy"] = {
+        "ssh_host": ssh_host,
+        "ssh_user": ssh_user,
+        "ssh_password": ssh_password,
+        "ssh_port": ssh_port,
+        "default_domain": default_domain,
+        "api_key": api_key,
+    }
+    with open(CONFIG_PATH, "w") as f:
+        cfg.write(f)
+    os.chmod(CONFIG_PATH, 0o600)
+    print(f"\nConfig saved to {CONFIG_PATH} (mode 600).")
+    print("Test it: proxdeploy status")
+
+
+COMMANDS = {
+    "status":  cmd_status,
+    "domains": cmd_domains,
+    "sysinfo": cmd_sysinfo,
+    "deploy":  cmd_deploy,
+    "update":  cmd_update,
+    "restart": cmd_restart,
+    "delete":  cmd_delete,
+    "logs":    cmd_logs,
+}
+
+
+def main():
+    args = sys.argv[1:]
+
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(HELP)
+        return
+
+    cmd = args[0]
+    rest = args[1:]
+
+    if cmd == "setup":
+        cmd_setup(rest)
+        return
+
+    if cmd not in COMMANDS:
+        print(f"proxdeploy: unknown command '{cmd}'")
+        print("Run 'proxdeploy --help' for usage.")
+        sys.exit(1)
+
+    cfg = load_config()
+    COMMANDS[cmd](rest, cfg)
+
+
+if __name__ == "__main__":
+    main()

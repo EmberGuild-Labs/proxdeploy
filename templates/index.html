@@ -1,0 +1,1834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ProxDeploy</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0b0e14;
+    --surface:   #121620;
+    --surface2:  #171c28;
+    --border:    #1e2535;
+    --ember:     #f97316;
+    --ember-dim: #7c3a0e;
+    --text:      #e2e8f0;
+    --muted:     #64748b;
+    --green:     #22c55e;
+    --yellow:    #eab308;
+    --red:       #ef4444;
+    --blue:      #3b82f6;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 40px 40px;
+    opacity: 0.3;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Nav ── */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(11,14,20,0.9);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 32px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .logo-icon {
+    width: 32px;
+    height: 32px;
+    background: var(--ember);
+    border-radius: 7px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 15px;
+    color: #fff;
+  }
+
+  .logo-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -0.5px;
+  }
+
+  .logo-text span { color: var(--ember); }
+
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .domain-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 20px;
+  }
+
+  .domain-badge span { color: var(--ember); }
+
+  .logout-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: 'Inter', sans-serif;
+  }
+
+  .logout-btn:hover { border-color: var(--ember); color: var(--ember); }
+
+  /* ── Layout ── */
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 32px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── Deploy form ── */
+  .deploy-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-bottom: 40px;
+  }
+
+  .deploy-card h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .deploy-card h2::before {
+    content: '';
+    width: 3px;
+    height: 18px;
+    background: var(--ember);
+    border-radius: 2px;
+    display: inline-block;
+  }
+
+  .deploy-card p {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 200px 90px 160px auto;
+    gap: 12px;
+    align-items: end;
+  }
+
+  .field { display: flex; flex-direction: column; gap: 6px; }
+
+  .field label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+  }
+
+  .field input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .field input:focus { border-color: var(--ember); }
+  .field input::placeholder { color: var(--muted); }
+
+  .subdomain-wrap {
+    display: flex;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .subdomain-wrap:focus-within { border-color: var(--ember); }
+
+  .subdomain-wrap input {
+    background: transparent;
+    border: none;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .subdomain-suffix {
+    padding: 10px 12px 10px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  /* Domain picker sits where the static suffix used to — styled to still read
+     as part of the field, not as a separate control. */
+  .domain-select {
+    appearance: none;
+    background: transparent;
+    border: none;
+    border-left: 1px solid var(--border);
+    padding: 10px 26px 10px 10px;
+    margin-left: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    outline: none;
+    /* caret */
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 14px) 18px, calc(100% - 9px) 18px;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+  }
+  .domain-select:hover { color: var(--text); }
+  .domain-select option { background: var(--card); color: var(--text); }
+
+  .domain-badge select {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--ember);
+    font: inherit;
+    cursor: pointer;
+    outline: none;
+  }
+  .domain-badge select option { background: var(--card); color: var(--text); }
+
+  .btn-deploy {
+    background: var(--ember);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 11px 22px;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s, transform 0.1s;
+  }
+
+  .btn-deploy:hover { background: #ea6a0a; }
+  .btn-deploy:active { transform: scale(0.97); }
+  .btn-deploy:disabled { background: var(--ember-dim); cursor: not-allowed; }
+
+  /* ── Toast ── */
+  #toast {
+    position: fixed;
+    bottom: 28px;
+    right: 28px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 20px;
+    font-size: 14px;
+    z-index: 999;
+    display: none;
+    max-width: 340px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    animation: slideUp 0.25s ease;
+  }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  #toast.ok  { border-color: var(--green);  color: var(--green); }
+  #toast.err { border-color: var(--red);    color: var(--red); }
+  #toast.inf { border-color: var(--ember);  color: var(--ember); }
+
+  /* ── Services ── */
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .section-title {
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+  }
+
+  .service-count {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .services-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+
+  .service-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+    transition: border-color 0.2s;
+  }
+
+  .service-card:hover { border-color: #2d3a52; }
+
+  .service-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+
+  .service-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .service-url {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ember);
+    margin-top: 3px;
+    text-decoration: none;
+  }
+
+  .service-url:hover { text-decoration: underline; }
+
+  .status-dot {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+
+  .status-dot::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .status-online  { background: rgba(34,197,94,0.1);  color: var(--green);  }
+  .status-online::before  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-deploying { background: rgba(234,179,8,0.1);  color: var(--yellow); }
+  .status-deploying::before { background: var(--yellow); animation: pulse 1.2s infinite; }
+  .status-updating  { background: rgba(59,130,246,0.1); color: var(--blue); }
+  .status-updating::before  { background: var(--blue);   animation: pulse 1.2s infinite; }
+  .status-error   { background: rgba(239,68,68,0.1);  color: var(--red); }
+  .status-error::before   { background: var(--red); }
+  .status-paused  { background: rgba(100,116,139,0.15); color: var(--muted); }
+  .status-paused::before  { background: var(--muted); }
+
+  .service-card.paused { opacity: 0.65; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .service-meta {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 10px;
+    line-height: 1.6;
+    font-family: 'JetBrains Mono', monospace;
+    word-break: break-all;
+  }
+
+  .service-res {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 14px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+  }
+
+  .service-res b { color: var(--text); font-weight: 600; }
+
+  .service-actions {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .btn-sm {
+    padding: 8px 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    font-family: 'Inter', sans-serif;
+    transition: all 0.2s;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .btn-sm:hover { border-color: var(--ember); color: var(--ember); }
+  .btn-sm.danger:hover { border-color: var(--red); color: var(--red); }
+  .btn-sm.log-btn:hover { border-color: var(--blue); color: var(--blue); }
+  .btn-sm.restart-btn:hover { border-color: var(--yellow); color: var(--yellow); }
+
+  /* ── Stats strip ── */
+  .stats-strip {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 32px;
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    position: relative;
+    z-index: 90;
+  }
+
+  .stat-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .stat-label {
+    color: var(--muted);
+    min-width: 32px;
+  }
+
+  .stat-bar-wrap {
+    width: 120px;
+    height: 5px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .stat-bar {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+  }
+
+  .stat-bar.cpu { background: var(--ember); }
+  .stat-bar.ram { background: var(--blue); }
+
+  .stat-bar.warn  { background: var(--yellow); }
+  .stat-bar.crit  { background: var(--red); }
+
+  .stat-val { color: var(--text); min-width: 68px; }
+
+  /* ── Log drawer ── */
+  #log-drawer {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: none;
+  }
+
+  #log-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+  }
+
+  #log-panel {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 560px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+
+  #log-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  #log-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  #log-close {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+  }
+
+  #log-close:hover { border-color: var(--red); color: var(--red); }
+
+  .log-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .log-tab {
+    padding: 10px 20px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: all 0.2s;
+    background: transparent;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    font-family: 'Inter', sans-serif;
+  }
+
+  .log-tab.active { color: var(--ember); border-bottom-color: var(--ember); }
+
+  #log-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.8;
+  }
+
+  .log-line { color: var(--text); }
+  .log-line.err { color: var(--red); }
+  .log-line.warn { color: var(--yellow); }
+  .log-line.empty { color: var(--muted); font-style: italic; }
+
+  /* ── Confirm modal ── */
+  #confirm-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 300;
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #confirm-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(4px);
+  }
+
+  #confirm-box {
+    position: relative;
+    z-index: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    width: 360px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+
+  #confirm-box h3 { margin-bottom: 10px; }
+  #confirm-box p  { color: var(--muted); font-size: 14px; margin-bottom: 24px; line-height: 1.5; }
+
+  .confirm-btns { display: flex; gap: 10px; }
+  .confirm-btns button {
+    flex: 1;
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: all 0.2s;
+  }
+
+  #confirm-cancel, #edit-cancel { background: var(--bg); border: 1px solid var(--border); color: var(--text); }
+  #confirm-cancel:hover, #edit-cancel:hover { border-color: var(--muted); }
+  #edit-box .confirm-btns button { flex: 1; padding: 10px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s; }
+  #confirm-ok    { background: var(--red); border: 1px solid var(--red); color: #fff; }
+  #confirm-ok:hover { background: #dc2626; }
+
+  /* ── View tabs (Sites / Redirects) ── */
+  .view-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 3px;
+  }
+
+  .view-tab {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .view-tab:hover { color: var(--text); }
+  .view-tab.active { background: var(--ember); color: #fff; }
+
+  .view-tab .tab-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 400;
+    opacity: 0.75;
+    margin-left: 6px;
+  }
+
+  /* ── Sort select ── */
+  .sort-select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    padding: 6px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    outline: none;
+  }
+
+  .sort-select:hover, .sort-select:focus { border-color: var(--ember); }
+
+  /* ── Project groups ── */
+  .project-group { margin-bottom: 28px; }
+
+  .project-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 4px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .project-header:hover .project-name { color: var(--ember); }
+
+  .project-caret {
+    font-size: 11px;
+    color: var(--muted);
+    transition: transform 0.2s;
+    display: inline-block;
+  }
+
+  .project-group.collapsed .project-caret { transform: rotate(-90deg); }
+  .project-group.collapsed .services-grid { display: none; }
+
+  .project-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    transition: color 0.2s;
+  }
+
+  .project-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ── Edit modal ── */
+  #edit-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 300;
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #edit-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(4px);
+  }
+
+  #edit-box {
+    position: relative;
+    z-index: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 26px 30px;
+    width: 480px;
+    max-width: calc(100vw - 32px);
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+
+  .manage-section {
+    border-top: 1px solid var(--border);
+    margin-top: 20px;
+    padding-top: 16px;
+  }
+
+  .manage-section h4 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+
+  .manage-section .hint { margin-bottom: 12px; }
+
+  .ext-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+
+  .ext-row .ext-path { color: var(--ember); font-weight: 600; }
+  .ext-row .ext-info { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ext-row button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 5px;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+    transition: all 0.2s;
+  }
+  .ext-row button:hover { border-color: var(--ember); color: var(--ember); }
+  .ext-row button.danger:hover { border-color: var(--red); color: var(--red); }
+
+  .manage-add-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 64px auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .manage-add-row input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 8px 10px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    outline: none;
+    min-width: 0;
+  }
+
+  .manage-add-row input:focus { border-color: var(--ember); }
+
+  .manage-add-row .btn-add {
+    background: var(--ember);
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: 'Inter', sans-serif;
+  }
+
+  .manage-add-row .btn-add:hover { background: #ea6a0a; }
+
+  .ext-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+
+  .ext-chip {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ember);
+    background: rgba(249,115,22,0.08);
+    border: 1px solid var(--ember-dim);
+    border-radius: 20px;
+    padding: 2px 10px;
+  }
+
+  #edit-box h3 { margin-bottom: 6px; }
+  #edit-box .hint { color: var(--muted); font-size: 12px; margin-bottom: 18px; line-height: 1.5; }
+  #edit-box .field { margin-bottom: 14px; }
+  #edit-box .field input { width: 100%; }
+  #edit-save { background: var(--ember); border: 1px solid var(--ember); color: #fff; }
+  #edit-save:hover { background: #ea6a0a; }
+
+  /* ── Empty state ── */
+  .empty-state {
+    text-align: center;
+    padding: 64px 0;
+    color: var(--muted);
+  }
+
+  .empty-state .icon {
+    font-size: 40px;
+    margin-bottom: 16px;
+    display: block;
+  }
+
+  .empty-state h3 { color: var(--text); margin-bottom: 8px; }
+  .empty-state p  { font-size: 14px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">
+    <div class="logo-icon">P</div>
+    <div class="logo-text">Prox<span>Deploy</span></div>
+  </div>
+  <div class="nav-right">
+    <div class="domain-badge">
+      <span>{% for d in domains %}*.{{ d }}{% if not loop.last %} · {% endif %}{% endfor %}</span>
+    </div>
+    <button class="logout-btn" onclick="location.href='logout'">Sign out</button>
+  </div>
+</nav>
+
+<!-- System stats strip -->
+<div class="stats-strip">
+  <div class="stat-item">
+    <span class="stat-label">CPU</span>
+    <div class="stat-bar-wrap"><div class="stat-bar cpu" id="cpu-bar" style="width:0%"></div></div>
+    <span class="stat-val" id="cpu-val">—</span>
+  </div>
+  <div class="stat-item">
+    <span class="stat-label">RAM</span>
+    <div class="stat-bar-wrap"><div class="stat-bar ram" id="ram-bar" style="width:0%"></div></div>
+    <span class="stat-val" id="ram-val">—</span>
+  </div>
+</div>
+
+<main>
+  <!-- Deploy form -->
+  <div class="deploy-card">
+    <h2>Deploy a new service</h2>
+    <p>Paste a GitHub repo URL, pick a domain and a subdomain — ProxDeploy handles the rest. Leave the subdomain empty to deploy the domain's landing page.</p>
+    <div class="form-row">
+      <div class="field">
+        <label>GitHub Repo URL</label>
+        <input type="text" id="repo-url" placeholder="https://github.com/yourname/my-site">
+      </div>
+      <div class="field">
+        <label>Subdomain</label>
+        <div class="subdomain-wrap">
+          <input type="text" id="subdomain" placeholder="my-site" oninput="updateDeployHint()">
+          <select class="domain-select" id="deploy-domain" onchange="updateDeployHint()">
+            {% for d in domains %}<option value="{{ d }}">.{{ d }}</option>{% endfor %}
+          </select>
+        </div>
+        <span class="hint" id="deploy-hint" style="font-size:11px; margin-top:4px; display:block;"></span>
+      </div>
+      <div class="field">
+        <label>Port (optional)</label>
+        <input type="number" id="port" placeholder="3000" min="1" max="65535">
+      </div>
+      <div class="field">
+        <label>Project (optional)</label>
+        <input type="text" id="project" placeholder="Project A" list="project-list">
+        <datalist id="project-list"></datalist>
+      </div>
+      <button class="btn-deploy" id="deploy-btn" onclick="deployService()">Deploy →</button>
+    </div>
+    <div class="form-row" style="grid-template-columns: 200px 1fr 110px auto; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);">
+      <div class="field">
+        <label>Or add a redirect</label>
+        <div class="subdomain-wrap">
+          <input type="text" id="redir-sub" placeholder="example">
+          <select class="domain-select" id="redir-domain">
+            {% for d in domains %}<option value="{{ d }}">.{{ d }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Redirects to</label>
+        <input type="text" id="redir-target" placeholder="example.com/somewhere or any URL">
+      </div>
+      <div class="field">
+        <label>Keep path</label>
+        <label style="display:flex; align-items:center; gap:8px; padding:10px 0; text-transform:none; letter-spacing:0; font-size:12px; color:var(--muted); cursor:pointer;">
+          <input type="checkbox" id="redir-preserve" style="accent-color: var(--ember);"> /foo → target/foo
+        </label>
+      </div>
+      <button class="btn-deploy" onclick="addRedirect()">Redirect →</button>
+    </div>
+  </div>
+
+  <!-- Services -->
+  <div class="section-header">
+    <div class="view-tabs">
+      <button class="view-tab active" id="tab-sites" onclick="setView('sites')">Sites<span class="tab-count" id="count-sites"></span></button>
+      <button class="view-tab" id="tab-redirects" onclick="setView('redirects')">Redirects<span class="tab-count" id="count-redirects"></span></button>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <select class="sort-select" id="sort-select" onchange="setSort(this.value)">
+        <option value="alpha">Sort: A → Z</option>
+        <option value="oldest">Sort: Longest running</option>
+        <option value="newest">Sort: Recently added</option>
+        <option value="cpu">Sort: Most CPU</option>
+        <option value="ram">Sort: Most RAM</option>
+      </select>
+      <div class="service-count" id="svc-count">0 sites</div>
+    </div>
+  </div>
+  <div id="services-groups">
+    <div class="empty-state" id="empty-state">
+      <span class="icon">🚀</span>
+      <h3>No services deployed yet</h3>
+      <p>Deploy your first repo above to get started.</p>
+    </div>
+  </div>
+</main>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- Log drawer -->
+<div id="log-drawer">
+  <div id="log-overlay" onclick="closeLogs()"></div>
+  <div id="log-panel">
+    <div id="log-header">
+      <div id="log-title">Logs — <span id="log-svc"></span></div>
+      <button id="log-close" onclick="closeLogs()">✕</button>
+    </div>
+    <div class="log-tabs">
+      <button class="log-tab active" onclick="switchTab('all')">All output</button>
+      <button class="log-tab" onclick="switchTab('errors')">Errors & warnings</button>
+    </div>
+    <div id="log-body"></div>
+  </div>
+</div>
+
+<!-- Edit modal -->
+<div id="edit-modal">
+  <div id="edit-overlay" onclick="closeEdit()"></div>
+  <div id="edit-box">
+    <h3>Manage <span id="edit-name"></span></h3>
+    <p class="hint">Group this site into a project folder, and (for dynamic sites) set its systemd service so Pause/Resume and Restart can stop/start the app process.</p>
+    <div class="field">
+      <label>Project folder</label>
+      <input type="text" id="edit-project" placeholder="e.g. Project A" list="project-list">
+    </div>
+    <div class="field">
+      <label>Systemd service (optional)</label>
+      <input type="text" id="edit-service" placeholder="e.g. fuzzbox.service">
+    </div>
+    <div class="confirm-btns">
+      <button id="edit-cancel" onclick="closeEdit()">Close</button>
+      <button id="edit-save" onclick="saveEdit()">Save settings</button>
+    </div>
+
+    <div class="manage-section" id="sec-redir" style="display:none;">
+      <h4>Redirect target</h4>
+      <p class="hint">Where should <span id="redir-example"></span> send visitors?</p>
+      <div class="manage-add-row" style="grid-template-columns: 1fr auto auto;">
+        <input type="text" id="edit-redir-target" placeholder="https://…">
+        <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); cursor:pointer;">
+          <input type="checkbox" id="edit-redir-preserve" style="accent-color: var(--ember);"> keep path
+        </label>
+        <button class="btn-add" onclick="saveRedirect()">Save</button>
+      </div>
+    </div>
+
+    <div class="manage-section" id="sec-ext">
+      <h4>Path extensions</h4>
+      <p class="hint">Serve another repo under a path of this domain, like <span id="ext-example"></span>. Leave the port empty for a static repo, or set a port to proxy a dynamic app.</p>
+      <div id="ext-list"></div>
+      <div class="manage-add-row">
+        <input type="text" id="ext-path" placeholder="/blog">
+        <input type="text" id="ext-repo" placeholder="https://github.com/…">
+        <input type="number" id="ext-port" placeholder="port" min="1" max="65535">
+        <button class="btn-add" onclick="addExtension()">Add</button>
+      </div>
+    </div>
+
+    <div class="manage-section" id="sec-sub">
+      <h4>Nested subdomains</h4>
+      <p class="hint">Deploy a whole new site under this one, like <span id="sub-example"></span>. It shows up as its own card. <b style="color:var(--yellow)">Heads up:</b> Cloudflare's free SSL certificate only covers one level of subdomain, so browsers may show a certificate warning on nested subdomains.</p>
+      <div id="sub-list"></div>
+      <div class="manage-add-row" style="grid-template-columns: 1fr 1.4fr 64px auto;">
+        <input type="text" id="sub-name" placeholder="api">
+        <input type="text" id="sub-repo" placeholder="https://github.com/…">
+        <input type="number" id="sub-port" placeholder="port" min="1" max="65535">
+        <button class="btn-add" onclick="addSubdomain()">Add</button>
+      </div>
+    </div>
+
+    <div class="manage-section" id="sec-conv">
+      <h4>Convert / move this site</h4>
+      <p class="hint">Move this site <b>without re-uploading anything</b> — the files stay where they are. Pick a parent site and a name, then choose: <b>→ /path</b> makes it <span id="conv-example-ext"></span>, <b>→ subdomain</b> makes it <span id="conv-example-sub"></span>, and <b>→ standalone</b> renames it to just <span id="conv-example-solo"></span> (use this to revert a nested subdomain, or to rename any site).</p>
+      <div class="manage-add-row" style="grid-template-columns: 1fr 90px 130px auto auto auto;">
+        <select id="conv-parent" class="sort-select" onchange="updateConvExamples()"></select>
+        <input type="text" id="conv-name" placeholder="name" oninput="updateConvExamples()">
+        <select id="conv-domain" class="sort-select" onchange="updateConvExamples()">
+          {% for d in domains %}<option value="{{ d }}">.{{ d }}</option>{% endfor %}
+        </select>
+        <button class="btn-add" onclick="convertSite('extension')">→ /path</button>
+        <button class="btn-add" onclick="convertSite('subdomain')">→ subdomain</button>
+        <button class="btn-add" onclick="convertSite('standalone')">→ standalone</button>
+      </div>
+      <p class="hint" style="margin-top:8px">The domain picker applies to <b>→ standalone</b> — use it to move a site to your other domain, or leave the name blank to make it that domain's landing page. <b>→ /path</b> and <b>→ subdomain</b> always follow the parent site's domain.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm modal -->
+<div id="confirm-modal">
+  <div id="confirm-overlay"></div>
+  <div id="confirm-box">
+    <h3>Remove service?</h3>
+    <p id="confirm-text"></p>
+    <div class="confirm-btns">
+      <button id="confirm-cancel" onclick="closeConfirm()">Cancel</button>
+      <button id="confirm-ok" onclick="confirmDelete()">Remove</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Domains ───────────────────────────────────────────────────────────────────
+const DOMAINS        = {{ domains|tojson }};
+const DEFAULT_DOMAIN = {{ domain|tojson }};
+// Server-rendered hostnames for the first paint; api/status refreshes these.
+const INITIAL_FQDNS  = {{ fqdns|tojson }};
+
+/* A site's key is its bare name on the default domain and its full hostname
+   everywhere else, so never build a hostname by concatenation — ask here. */
+function fqdnOf(name) {
+  const svc = (lastServices || {})[name];
+  if (svc && svc.fqdn) return svc.fqdn;
+  if (INITIAL_FQDNS[name]) return INITIAL_FQDNS[name];
+  return `${name}.${DEFAULT_DOMAIN}`;
+}
+
+function domainOf(name) {
+  const svc = (lastServices || {})[name];
+  return (svc && svc.domain) || DEFAULT_DOMAIN;
+}
+
+/* The label under the subdomain box: shows exactly what will be deployed,
+   including the apex case where the subdomain is left blank. */
+function updateDeployHint() {
+  const sub = document.getElementById('subdomain').value.trim().replace(/^\.+|\.+$/g, '');
+  const dom = document.getElementById('deploy-domain').value;
+  const hint = document.getElementById('deploy-hint');
+  hint.textContent = sub ? `→ ${sub}.${dom}` : `→ ${dom} (landing page)`;
+  hint.style.color = sub ? 'var(--muted)' : 'var(--ember)';
+}
+
+let currentLogs = { all: [], errors: [] };
+let currentTab = 'all';
+let deleteTarget = null;
+let editTarget = null;
+let lastServices = {};
+let lastResources = {};
+let sortMode = localStorage.getItem('proxdeploy-sort') || 'alpha';
+let viewMode = localStorage.getItem('proxdeploy-view') || 'sites';
+let collapsed = new Set(JSON.parse(localStorage.getItem('proxdeploy-collapsed') || '[]'));
+
+document.getElementById('sort-select').value = sortMode;
+
+function setView(mode) {
+  viewMode = mode;
+  localStorage.setItem('proxdeploy-view', mode);
+  document.getElementById('tab-sites').classList.toggle('active', mode === 'sites');
+  document.getElementById('tab-redirects').classList.toggle('active', mode === 'redirects');
+  renderServices();
+}
+setView(viewMode);
+
+// ── Poll service status every 4s ──────────────────────────────────────────────
+async function pollStatus() {
+  try {
+    const r = await fetch('api/status');
+    lastServices = await r.json();
+    renderServices();
+    if (editTarget && document.getElementById('edit-modal').style.display === 'flex') renderManageLists();
+  } catch(e) {}
+}
+
+async function pollResources() {
+  try {
+    const r = await fetch('api/resources');
+    lastResources = await r.json();
+    renderServices();
+  } catch(e) {}
+}
+
+setInterval(pollStatus, 4000);
+setInterval(pollResources, 10000);
+pollStatus();
+pollResources();
+
+// ── Sorting / grouping ────────────────────────────────────────────────────────
+function setSort(mode) {
+  sortMode = mode;
+  localStorage.setItem('proxdeploy-sort', mode);
+  renderServices();
+}
+
+function sortKeys(keys, services) {
+  const byDate = n => services[n].deployed_at || services[n].updated_at || '';
+  if (sortMode === 'oldest') return keys.sort((a,b) => (byDate(a) || '9999').localeCompare(byDate(b) || '9999'));
+  if (sortMode === 'newest') return keys.sort((a,b) => (byDate(b) || '').localeCompare(byDate(a) || ''));
+  if (sortMode === 'cpu' || sortMode === 'ram') {
+    // Highest utilization first; sites with no data sink to the bottom
+    const val = n => {
+      const r = lastResources[n] || {};
+      return sortMode === 'cpu' ? (r.cpu ?? -1) : (r.ram_mb ?? -1);
+    };
+    return keys.sort((a,b) => val(b) - val(a) || a.localeCompare(b));
+  }
+  return keys.sort();
+}
+
+function toggleGroup(project) {
+  if (collapsed.has(project)) collapsed.delete(project); else collapsed.add(project);
+  localStorage.setItem('proxdeploy-collapsed', JSON.stringify([...collapsed]));
+  renderServices();
+}
+
+function fmtUptime(s) {
+  if (s == null) return null;
+  const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderServices() {
+  const services = lastServices;
+  const wrap = document.getElementById('services-groups');
+  const count = document.getElementById('svc-count');
+  const allKeys = Object.keys(services);
+
+  // Split into the two views
+  const siteKeys  = allKeys.filter(n => !services[n].redirect_to);
+  const redirKeys = allKeys.filter(n => services[n].redirect_to);
+  document.getElementById('count-sites').textContent = siteKeys.length || '';
+  document.getElementById('count-redirects').textContent = redirKeys.length || '';
+
+  const keys = viewMode === 'redirects' ? redirKeys : siteKeys;
+  const noun = viewMode === 'redirects' ? 'redirects' : 'sites';
+
+  const online = keys.filter(n => services[n].status === 'online').length;
+  const paused = keys.filter(n => services[n].status === 'paused').length;
+  count.textContent = `${keys.length} ${noun} · ${online} online` + (paused ? ` · ${paused} paused` : '');
+
+  if (keys.length === 0) {
+    wrap.innerHTML = viewMode === 'redirects'
+      ? `<div class="empty-state" id="empty-state">
+          <span class="icon">↪️</span>
+          <h3>No redirects yet</h3>
+          <p>Use the "Or add a redirect" row above to point a subdomain anywhere.</p>
+        </div>`
+      : `<div class="empty-state" id="empty-state">
+          <span class="icon">🚀</span>
+          <h3>No services deployed yet</h3>
+          <p>Deploy your first repo above to get started.</p>
+        </div>`;
+    return;
+  }
+
+  // Group by project
+  const groups = {};
+  for (const name of keys) {
+    const p = (services[name].project || '').trim() || 'Ungrouped';
+    (groups[p] = groups[p] || []).push(name);
+  }
+  const projectNames = Object.keys(groups).sort((a,b) => {
+    if (a === 'Ungrouped') return 1;
+    if (b === 'Ungrouped') return -1;
+    return a.localeCompare(b);
+  });
+
+  // Keep project datalist fresh for the deploy form + edit modal
+  document.getElementById('project-list').innerHTML =
+    projectNames.filter(p => p !== 'Ungrouped').map(p => `<option value="${escHtml(p)}">`).join('');
+
+  wrap.innerHTML = projectNames.map(project => {
+    const isCollapsed = collapsed.has(project);
+    const cards = sortKeys(groups[project], services).map(name => serviceCard(name, services[name])).join('');
+    return `<div class="project-group ${isCollapsed ? 'collapsed' : ''}">
+      <div class="project-header" onclick="toggleGroup('${escAttr(project)}')">
+        <span class="project-caret">▼</span>
+        <span class="project-name">${escHtml(project)}</span>
+        <span class="project-count">${groups[project].length} site${groups[project].length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="services-grid">${cards}</div>
+    </div>`;
+  }).join('');
+}
+
+function serviceCard(name, svc) {
+  const url = `https://${fqdnOf(name)}`;
+  const statusLabel = {
+    online: 'Online', deploying: 'Deploying…', updating: 'Updating…',
+    error: 'Error', paused: 'Paused'
+  }[svc.status] || svc.status;
+  const date = svc.updated_at || svc.deployed_at;
+  const dateStr = date ? new Date(date).toLocaleString() : '—';
+  const isPaused = svc.status === 'paused';
+
+  const res = lastResources[name] || {};
+  const bits = [];
+  if (res.cpu != null)     bits.push(`CPU <b>${res.cpu.toFixed(1)}%</b>`);
+  if (res.ram_mb != null)  bits.push(`RAM <b>${res.ram_mb} MB</b>`);
+  if (res.disk_mb != null) bits.push(`Disk <b>${res.disk_mb} MB</b>`);
+  const up = fmtUptime(res.uptime_s);
+  if (up)                  bits.push(`Up <b>${up}</b>`);
+  if (svc.service_name && res.unit_active === false && !isPaused)
+    bits.push(`<b style="color:var(--red)">app stopped</b>`);
+  const resRow = bits.length ? `<div class="service-res">${bits.join('<span>·</span>')}</div>` : '';
+
+  const extPaths = Object.keys(svc.extensions || {});
+  const extChips = extPaths.length
+    ? `<div class="ext-chips">${extPaths.sort().map(p => `<span class="ext-chip">/${p}</span>`).join('')}</div>`
+    : '';
+
+  // Redirect "sites" get a slimmed-down card
+  if (svc.redirect_to) {
+    return `<div class="service-card ${isPaused ? 'paused' : ''}">
+      <div class="service-top">
+        <div>
+          <div class="service-name">${name} <span style="color:var(--muted); font-weight:400; font-size:11px;">redirect</span></div>
+          <a href="${url}" target="_blank" class="service-url">${url}</a>
+        </div>
+        <div class="status-dot status-${svc.status}">${statusLabel}</div>
+      </div>
+      <div class="service-meta">
+        → ${escHtml(svc.redirect_to)}${svc.preserve_path ? ' <span style="color:var(--muted)">(keeps path)</span>' : ''}
+      </div>
+      <div class="service-actions">
+        ${pauseBtn}
+        <button class="btn-sm" onclick="openEdit('${name}')">⚙ Manage</button>
+        <button class="btn-sm danger" onclick="askDelete('${name}')">✕ Remove</button>
+      </div>
+    </div>`;
+  }
+
+  const pauseBtn = isPaused
+    ? `<button class="btn-sm" onclick="resumeService('${name}')">▶ Resume</button>`
+    : `<button class="btn-sm" onclick="pauseService('${name}')">⏸ Pause</button>`;
+
+  return `<div class="service-card ${isPaused ? 'paused' : ''}">
+    <div class="service-top">
+      <div>
+        <div class="service-name">${name}</div>
+        <a href="${url}" target="_blank" class="service-url">${url}</a>
+      </div>
+      <div class="status-dot status-${svc.status}">${statusLabel}</div>
+    </div>
+    <div class="service-meta">
+      ${escHtml(svc.repo_url)}<br>
+      Last updated: ${dateStr}
+    </div>
+    ${extChips}
+    ${resRow}
+    <div class="service-actions">
+      ${pauseBtn}
+      <button class="btn-sm" onclick="updateService('${name}')">↑ Update</button>
+      <button class="btn-sm restart-btn" onclick="restartService('${name}')">↺ Restart</button>
+      <button class="btn-sm log-btn" onclick="openLogs('${name}')">Logs</button>
+      <button class="btn-sm" onclick="openEdit('${name}')">⚙ Manage</button>
+      <button class="btn-sm danger" onclick="askDelete('${name}')">✕ Remove</button>
+    </div>
+  </div>`;
+}
+
+// ── Deploy ────────────────────────────────────────────────────────────────────
+async function deployService() {
+  const repoUrl  = document.getElementById('repo-url').value.trim();
+  const subdomain = document.getElementById('subdomain').value.trim();
+  const domain   = document.getElementById('deploy-domain').value;
+  const port     = document.getElementById('port').value.trim();
+  const project  = document.getElementById('project').value.trim();
+  const btn      = document.getElementById('deploy-btn');
+
+  if (!repoUrl) { toast('Fill in the repo URL.', 'err'); return; }
+
+  // An empty subdomain means the apex — worth confirming, since it replaces
+  // whatever the domain's landing page currently is.
+  if (!subdomain && !confirm(`Deploy this repo as the landing page at ${domain}?`)) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Deploying…';
+
+  const r = await fetch('api/deploy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repo_url: repoUrl, subdomain, domain, port: port || null, project })
+  });
+  const data = await r.json();
+
+  btn.disabled = false;
+  btn.textContent = 'Deploy →';
+
+  if (data.ok) {
+    toast(data.message, 'ok');
+    document.getElementById('repo-url').value = '';
+    document.getElementById('subdomain').value = '';
+    document.getElementById('port').value = '';
+    document.getElementById('project').value = '';
+    pollStatus();
+  } else {
+    toast(data.error, 'err');
+  }
+}
+
+// ── Update ────────────────────────────────────────────────────────────────────
+async function updateService(name) {
+  const r = await fetch('api/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdomain: name })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  if (data.ok) pollStatus();
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+function askDelete(name) {
+  deleteTarget = name;
+  document.getElementById('confirm-text').textContent =
+    `This will remove "${fqdnOf(name)}", delete its files, remove the Nginx config, and delete the Cloudflare DNS record. This cannot be undone.`;
+  document.getElementById('confirm-modal').style.display = 'flex';
+}
+
+function closeConfirm() {
+  deleteTarget = null;
+  document.getElementById('confirm-modal').style.display = 'none';
+}
+
+async function confirmDelete() {
+  if (!deleteTarget) return;
+  const name = deleteTarget;
+  closeConfirm();
+  const r = await fetch('api/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdomain: name })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  if (data.ok) pollStatus();
+}
+
+// ── Logs ──────────────────────────────────────────────────────────────────────
+async function openLogs(name) {
+  document.getElementById('log-svc').textContent = name;
+  document.getElementById('log-drawer').style.display = 'block';
+  await refreshLogs(name);
+}
+
+async function refreshLogs(name) {
+  const r = await fetch(`api/logs/${name}`);
+  currentLogs = await r.json();
+  renderLogLines();
+}
+
+function renderLogLines() {
+  const body = document.getElementById('log-body');
+  const lines = currentLogs[currentTab];
+  if (!lines || lines.length === 0) {
+    body.innerHTML = `<div class="log-line empty">No ${currentTab === 'errors' ? 'errors or warnings' : 'output'} yet.</div>`;
+    return;
+  }
+  body.innerHTML = lines.map(l => {
+    const cls = l.includes('[ERROR]') ? 'err' : l.includes('[WARN]') ? 'warn' : '';
+    return `<div class="log-line ${cls}">${escHtml(l.trimEnd())}</div>`;
+  }).join('');
+  body.scrollTop = body.scrollHeight;
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.log-tab').forEach((el, i) => {
+    el.classList.toggle('active', (i === 0 && tab === 'all') || (i === 1 && tab === 'errors'));
+  });
+  renderLogLines();
+}
+
+function closeLogs() {
+  document.getElementById('log-drawer').style.display = 'none';
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function escAttr(s) {
+  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+}
+
+// ── Pause / Resume ────────────────────────────────────────────────────────────
+async function pauseService(name) {
+  toast(`Pausing ${name}…`, 'inf');
+  const r = await fetch('api/pause', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdomain: name })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  pollStatus(); pollResources();
+}
+
+async function resumeService(name) {
+  toast(`Resuming ${name}…`, 'inf');
+  const r = await fetch('api/resume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdomain: name })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  pollStatus(); pollResources();
+}
+
+// ── Manage (project / systemd service / extensions / subdomains) ─────────────
+function openEdit(name) {
+  editTarget = name;
+  const svc = lastServices[name] || {};
+  document.getElementById('edit-name').textContent = fqdnOf(name);
+  // Default the move-domain picker to where the site already lives, so
+  // "→ standalone" is a pure rename unless you deliberately change it.
+  document.getElementById('conv-domain').value = domainOf(name);
+  document.getElementById('edit-project').value = svc.project || '';
+  document.getElementById('edit-service').value = svc.service_name || '';
+  document.getElementById('ext-example').textContent = `${fqdnOf(name)}/blog`;
+  document.getElementById('sub-example').textContent = `api.${fqdnOf(name)}`;
+  ['ext-path','ext-repo','ext-port','sub-name','sub-repo','sub-port'].forEach(id =>
+    document.getElementById(id).value = '');
+
+  // Convert section: parent picker (all other sites) + name prefilled
+  const others = Object.keys(lastServices).filter(n => n !== name).sort();
+  document.getElementById('conv-parent').innerHTML =
+    others.map(n => `<option value="${n}">under ${n}</option>`).join('');
+  document.getElementById('conv-name').value = name.split('.')[0];
+  updateConvExamples();
+
+  // Redirect sites: show the redirect editor, hide the repo-only sections
+  const isRedirect = !!svc.redirect_to;
+  document.getElementById('sec-redir').style.display = isRedirect ? '' : 'none';
+  document.getElementById('sec-ext').style.display   = isRedirect ? 'none' : '';
+  document.getElementById('sec-sub').style.display   = isRedirect ? 'none' : '';
+  document.getElementById('sec-conv').style.display  = isRedirect ? 'none' : '';
+  if (isRedirect) {
+    document.getElementById('redir-example').textContent = `${fqdnOf(name)}`;
+    document.getElementById('edit-redir-target').value = svc.redirect_to || '';
+    document.getElementById('edit-redir-preserve').checked = !!svc.preserve_path;
+  }
+
+  renderManageLists();
+  document.getElementById('edit-modal').style.display = 'flex';
+}
+
+// ── Redirects ────────────────────────────────────────────────────────────────
+async function addRedirect() {
+  const sub    = document.getElementById('redir-sub').value.trim().toLowerCase();
+  const domain = document.getElementById('redir-domain').value;
+  const target = document.getElementById('redir-target').value.trim();
+  const preserve = document.getElementById('redir-preserve').checked;
+  if (!sub || !target) { toast('Fill in the subdomain and target URL.', 'err'); return; }
+  const r = await fetch('api/redirect/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdomain: sub, domain, target, preserve_path: preserve })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  if (data.ok) {
+    document.getElementById('redir-sub').value = '';
+    document.getElementById('redir-target').value = '';
+    document.getElementById('redir-preserve').checked = false;
+    await pollStatus();
+    setView('redirects');   // jump to the redirects tab so the new one is visible
+  }
+}
+
+async function saveRedirect() {
+  if (!editTarget) return;
+  const r = await fetch('api/redirect/edit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      subdomain: editTarget,
+      target: document.getElementById('edit-redir-target').value.trim(),
+      preserve_path: document.getElementById('edit-redir-preserve').checked
+    })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  if (data.ok) pollStatus();
+}
+
+/* The label part of a site's hostname (everything before its domain).
+   Empty string for a landing page. Needed to nest one site under another
+   when the parent may itself be on a non-default domain. */
+function subLabelOf(name) {
+  const svc = (lastServices || {})[name];
+  if (svc && svc.subdomain !== undefined) return svc.subdomain;
+  return name;  // legacy record: the key is the label
+}
+
+function convSoloTarget(nm) {
+  const dom = document.getElementById('conv-domain').value;
+  return nm ? `${nm}.${dom}` : `${dom} (landing page)`;
+}
+
+function updateConvExamples() {
+  const parent = document.getElementById('conv-parent').value || 'othersite';
+  const nm = document.getElementById('conv-name').value.trim() || 'name';
+  const parentLabel = subLabelOf(parent);
+  document.getElementById('conv-example-ext').textContent = `${fqdnOf(parent)}/${nm}/`;
+  document.getElementById('conv-example-sub').textContent = `${nm}.${fqdnOf(parent)}`;
+  document.getElementById('conv-example-solo').textContent = convSoloTarget(nm);
+}
+
+async function convertSite(mode) {
+  if (!editTarget) return;
+  const parent = document.getElementById('conv-parent').value;
+  const nm = document.getElementById('conv-name').value.trim().toLowerCase();
+  const convDomain = document.getElementById('conv-domain').value;
+  if (!parent && mode !== 'standalone') { toast('No other site to attach to.', 'err'); return; }
+  // Standalone with a blank name is the "make this the landing page" case
+  if (!nm && mode !== 'standalone') { toast('Give it a name.', 'err'); return; }
+
+  const target = mode === 'extension' ? `${fqdnOf(parent)}/${nm}/`
+             : mode === 'subdomain'  ? `${nm}.${fqdnOf(parent)}`
+             : convSoloTarget(nm);
+  if (!confirm(`Turn ${fqdnOf(editTarget)} into ${target}?\n\nFiles are NOT re-uploaded — they stay in place. The old address stops working and its DNS record is removed.`)) return;
+
+  // Relative URLs only — the dashboard may be mounted under a path prefix.
+  const url  = mode === 'extension' ? 'api/convert/extension' : 'api/convert/subdomain';
+  // Nesting under a parent must follow the PARENT's domain, not this site's.
+  const body = mode === 'extension'
+    ? { subdomain: editTarget, parent, path: nm }
+    : mode === 'subdomain'
+      ? { subdomain: editTarget,
+          new_subdomain: `${nm}.${subLabelOf(parent)}`,
+          domain: domainOf(parent) }
+      : { subdomain: editTarget, new_subdomain: nm, domain: convDomain };
+
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  if (data.ok) { closeEdit(); pollStatus(); pollResources(); }
+}
+
+function renderManageLists() {
+  if (!editTarget) return;
+  const svc = lastServices[editTarget] || {};
+
+  // Extensions
+  const exts = svc.extensions || {};
+  const extList = document.getElementById('ext-list');
+  extList.innerHTML = Object.keys(exts).sort().map(p => {
+    const e = exts[p];
+    const info = e.port ? `→ port ${e.port}` : `${e.repo_url || ''}`;
+    const status = e.status && e.status !== 'online' ? ` (${e.status})` : '';
+    const upd = e.repo_url ? `<button onclick="updateExtension('${p}')" title="Pull latest">↑</button>` : '';
+    return `<div class="ext-row">
+      <span class="ext-path">/${p}</span>
+      <span class="ext-info">${escHtml(info)}${status}</span>
+      ${upd}
+      <button onclick="detachExtension('${p}')" title="Revert: make this its own site again">↗</button>
+      <button class="danger" onclick="removeExtension('${p}')" title="Delete files">✕</button>
+    </div>`;
+  }).join('') || '<p class="hint" style="margin-bottom:10px">No extensions yet.</p>';
+
+  // Nested subdomains (sites named *.editTarget)
+  const children = Object.keys(lastServices).filter(n => n.endsWith('.' + editTarget)).sort();
+  document.getElementById('sub-list').innerHTML = children.map(n =>
+    `<div class="ext-row">
+      <span class="ext-path">${fqdnOf(n)}</span>
+      <span class="ext-info">${lastServices[n].status}</span>
+      <button class="danger" onclick="closeEdit(); askDelete('${n}')">✕</button>
+    </div>`
+  ).join('') || '<p class="hint" style="margin-bottom:10px">No nested subdomains yet.</p>';
+}
+
+async function addExtension() {
+  if (!editTarget) return;
+  const path = document.getElementById('ext-path').value.trim().replace(/^\/+/,'');
+  const repo = document.getElementById('ext-repo').value.trim();
+  const port = document.getElementById('ext-port').value.trim();
+  if (!path) { toast('Give the extension a path, like blog.', 'err'); return; }
+  const r = await fetch('api/ext/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdomain: editTarget, path, repo_url: repo, port: port || null })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  if (data.ok) {
+    ['ext-path','ext-repo','ext-port'].forEach(id => document.getElementById(id).value = '');
+    await pollStatus();
+    renderManageLists();
+  }
+}
+
+async function updateExtension(path) {
+  const r = await fetch('api/ext/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdomain: editTarget, path })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+}
+
+async function detachExtension(path) {
+  if (!editTarget) return;
+  const name = (prompt(`Make /${path} its own site again.\n\nWhat subdomain should it get? (files are not re-uploaded)`, path) || '').trim().toLowerCase();
+  if (!name) return;
+  const r = await fetch('api/convert/detach', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdomain: editTarget, path, new_subdomain: name })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  if (data.ok) { await pollStatus(); renderManageLists(); }
+}
+
+async function removeExtension(path) {
+  if (!confirm(`Remove /${path} from ${fqdnOf(editTarget)}? Its files will be deleted.`)) return;
+  const r = await fetch('api/ext/remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdomain: editTarget, path })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  await pollStatus();
+  renderManageLists();
+}
+
+async function addSubdomain() {
+  if (!editTarget) return;
+  const label = document.getElementById('sub-name').value.trim().replace(/\.+$/,'');
+  const repo  = document.getElementById('sub-repo').value.trim();
+  const port  = document.getElementById('sub-port').value.trim();
+  if (!label || !repo) { toast('Give a subdomain name and repo URL.', 'err'); return; }
+  const parent = lastServices[editTarget] || {};
+  const r = await fetch('api/deploy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      repo_url: repo,
+      subdomain: `${label}.${editTarget}`,
+      port: port || null,
+      project: parent.project || ''
+    })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  if (data.ok) {
+    ['sub-name','sub-repo','sub-port'].forEach(id => document.getElementById(id).value = '');
+    await pollStatus();
+    renderManageLists();
+  }
+}
+
+function closeEdit() {
+  editTarget = null;
+  document.getElementById('edit-modal').style.display = 'none';
+}
+
+async function saveEdit() {
+  if (!editTarget) return;
+  const body = {
+    subdomain: editTarget,
+    project: document.getElementById('edit-project').value.trim(),
+    service_name: document.getElementById('edit-service').value.trim()
+  };
+  closeEdit();
+  const r = await fetch('api/edit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  pollStatus();
+}
+
+// ── Restart ───────────────────────────────────────────────────────────────────
+async function restartService(name) {
+  toast(`Restarting ${name}…`, 'inf');
+  const r = await fetch('api/restart', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdomain: name })
+  });
+  const data = await r.json();
+  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+}
+
+// ── System stats ──────────────────────────────────────────────────────────────
+async function pollSysinfo() {
+  try {
+    const r = await fetch('api/sysinfo');
+    const d = await r.json();
+
+    const cpuPct = d.cpu_percent;
+    const ramPct = d.ram_percent;
+
+    const cpuBar = document.getElementById('cpu-bar');
+    const ramBar = document.getElementById('ram-bar');
+
+    cpuBar.style.width = cpuPct + '%';
+    cpuBar.className   = 'stat-bar cpu' + (cpuPct >= 90 ? ' crit' : cpuPct >= 70 ? ' warn' : '');
+
+    ramBar.style.width = ramPct + '%';
+    ramBar.className   = 'stat-bar ram' + (ramPct >= 90 ? ' crit' : ramPct >= 75 ? ' warn' : '');
+
+    document.getElementById('cpu-val').textContent = cpuPct.toFixed(1) + '%';
+    document.getElementById('ram-val').textContent =
+      `${d.ram_used_mb} / ${d.ram_total_mb} MB`;
+  } catch(e) {}
+}
+
+setInterval(pollSysinfo, 3000);
+pollSysinfo();
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+let toastTimer;
+function toast(msg, type='inf') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = type;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.style.display = 'none', 4000);
+}
+</script>
+</body>
+</html>
