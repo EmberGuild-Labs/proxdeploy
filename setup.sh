@@ -181,16 +181,38 @@ if ! python3 -c "import venv" 2>/dev/null; then
 fi
 ok "venv module available"
 
-for c in nginx cloudflared; do
-  if command -v "$c" >/dev/null; then
-    ok "$c found at $(command -v "$c")"
+if command -v nginx >/dev/null || [ -x /usr/sbin/nginx ]; then
+  ok "nginx found"
+else
+  warn "nginx is not installed. It serves every site you deploy."
+  if confirm "Install nginx now with apt?" y; then
+    sudo apt update && sudo apt install -y nginx || die "Installing nginx failed."
+    ok "nginx installed"
   else
-    warn "$c is NOT installed."
-    printf '    %sProxDeploy manages nginx and cloudflared but does not install\n' "$DIM"
-    printf '    them. Set up a working Cloudflare Tunnel first.%s\n' "$R"
-    confirm "Continue anyway?" n || exit 1
+    die "ProxDeploy needs nginx."
   fi
-done
+fi
+
+if command -v cloudflared >/dev/null; then
+  ok "cloudflared found at $(command -v cloudflared)"
+else
+  warn "cloudflared is not installed. It's the Cloudflare Tunnel that carries"
+  warn "traffic from the internet to this machine, so no ports get opened."
+  if confirm "Install cloudflared now from Cloudflare's apt repository?" y; then
+    # Cloudflare's documented install: https://pkg.cloudflare.com/
+    # "any" covers every Debian-based release, Bookworm and Trixie included.
+    sudo mkdir -p --mode=0755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+      | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null \
+      || die "Couldn't download Cloudflare's signing key."
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' \
+      | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+    sudo apt update && sudo apt install -y cloudflared || die "Installing cloudflared failed."
+    ok "cloudflared installed"
+  else
+    die "ProxDeploy needs cloudflared."
+  fi
+fi
 
 # ─── Step 2: Cloudflare ───────────────────────────────────────────────────────
 step "Cloudflare"
@@ -232,13 +254,25 @@ while [ -z "$DOMAIN" ]; do
     d="$(echo "$d" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
     [ -z "$d" ] && continue
     info "Looking up zone for ${d}…"
-    ZID="$(cf_api GET "/zones?name=$d" | json_get result 0 id)"
+    ZRESP="$(cf_api GET "/zones?name=$d")"
+    ZID="$(echo "$ZRESP" | json_get result 0 id)"
     if [ -z "$ZID" ]; then
-      warn "No Cloudflare zone found for '$d' — is the domain on this account,"
-      warn "and does the token's Zone Resources include it?"
+      warn "No Cloudflare zone found for '$d'. Either the domain hasn't been added"
+      warn "to Cloudflare yet (dashboard → Add a domain), or the token's Zone"
+      warn "Resources don't include it."
       FAILED=1; continue
     fi
     ok "$d → zone ${ZID:0:8}…"
+    # A zone stays "pending" until the registrar points at Cloudflare's
+    # nameservers. Nothing here can do that step, but it can say exactly what
+    # to type, and the rest of setup works fine in the meantime.
+    if [ "$(echo "$ZRESP" | json_get result 0 status)" != "active" ]; then
+      NS1="$(echo "$ZRESP" | json_get result 0 name_servers 0)"
+      NS2="$(echo "$ZRESP" | json_get result 0 name_servers 1)"
+      warn "$d isn't active on Cloudflare yet. At your registrar, set its"
+      warn "nameservers to:  ${NS1:-?}  and  ${NS2:-?}"
+      info "Setup can finish now; sites on $d go live once that propagates."
+    fi
     [ -z "$DOMAIN" ] && DOMAIN="$d"
     DOMAINS_PAIRS="${DOMAINS_PAIRS:+$DOMAINS_PAIRS,}$d:$ZID"
   done
@@ -254,29 +288,46 @@ info "Default domain: ${B}${DOMAIN}${R}"
 # ─── Step 4: tunnel, GitHub, dashboard hostname ───────────────────────────────
 step "Tunnel and options"
 
-CF_TUNNEL_ID=""
-if command -v cloudflared >/dev/null; then
-  CF_TUNNEL_ID="$(cloudflared tunnel list 2>/dev/null \
-    | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' \
-    | head -1)"
-fi
-if [ -z "$CF_TUNNEL_ID" ]; then
-  for f in /etc/cloudflared/config.yml "$HOME/.cloudflared/config.yml"; do
-    [ -r "$f" ] || continue
-    CF_TUNNEL_ID="$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$f" | head -1)"
-    [ -n "$CF_TUNNEL_ID" ] && break
-  done
-fi
+# ProxDeploy needs a *locally-managed* tunnel: one whose routes live in
+# /etc/cloudflared/config.yml, because that file is what it edits to connect
+# domains. A tunnel created in the Cloudflare dashboard keeps its routes in the
+# cloud instead, and runs from a token with no config file at all.
+UUID_RE='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+CF_TUNNEL_ID=""; TUNNEL_MODE="existing"; TUNNEL_NAME=""; REMOTE_MANAGED=0
+for f in /etc/cloudflared/config.yml "$HOME/.cloudflared/config.yml"; do
+  sudo test -r "$f" 2>/dev/null || continue
+  CF_TUNNEL_ID="$(sudo grep -E '^\s*tunnel:' "$f" | grep -oE "$UUID_RE" | head -1)"
+  [ -n "$CF_TUNNEL_ID" ] && break
+done
+systemctl cat cloudflared 2>/dev/null | grep -q -- '--token' && REMOTE_MANAGED=1
 
 if [ -n "$CF_TUNNEL_ID" ]; then
-  ok "Detected tunnel $CF_TUNNEL_ID"
+  ok "Found tunnel $CF_TUNNEL_ID in $f"
   confirm "Use this tunnel?" y || CF_TUNNEL_ID="$(ask 'Tunnel UUID (blank to skip)')"
+elif [ "$REMOTE_MANAGED" -eq 1 ]; then
+  warn "cloudflared is running a tunnel managed from the Cloudflare dashboard."
+  warn "ProxDeploy can't add routes to that kind of tunnel. Without them, new"
+  warn "sites return 404 until you add each hostname by hand in the dashboard."
+  printf '\n    %sSetup can create a locally-managed tunnel and switch cloudflared\n' "$DIM"
+  printf '    over to it. Anything the old tunnel served stops being served by this\n'
+  printf '    machine, so only do this if the Pi has nothing else on that tunnel.%s\n\n' "$R"
+  if confirm "Replace it with a new locally-managed tunnel?" n; then
+    TUNNEL_MODE="create"
+  else
+    CF_TUNNEL_ID="$(ask 'Tunnel UUID to record anyway (blank to skip)')"
+  fi
 else
-  warn "Couldn't detect a tunnel automatically."
-  info "Find it with: cloudflared tunnel list"
-  CF_TUNNEL_ID="$(ask 'Tunnel UUID (blank to skip)')"
+  info "No tunnel on this machine yet. Setup will create one."
+  TUNNEL_MODE="create"
 fi
-[ -z "$CF_TUNNEL_ID" ] && warn "No tunnel ID — you won't be able to deploy a domain root (landing page)."
+
+if [ "$TUNNEL_MODE" = "create" ]; then
+  TUNNEL_NAME="$(ask 'Name for the new tunnel' "proxdeploy-$(hostname -s)")"
+  [ -f "$HOME/.cloudflared/cert.pem" ] \
+    || info "You'll be shown a Cloudflare link to open in a browser, on any device."
+elif [ -z "$CF_TUNNEL_ID" ]; then
+  warn "No tunnel ID — you won't be able to deploy a domain root (landing page)."
+fi
 
 printf '\n'
 GITHUB_TOKEN=""
@@ -301,13 +352,79 @@ cat <<SUMMARY
   Service user        $RUN_USER
   Default domain      $DOMAIN
   All domains         $(echo "$DOMAINS_PAIRS" | sed 's/:[0-9a-f]*//g')
-  Tunnel              ${CF_TUNNEL_ID:-(none)}
+  Tunnel              $([ "$TUNNEL_MODE" = create ] && echo "create new: $TUNNEL_NAME" || echo "${CF_TUNNEL_ID:-(none)}")
   Private repos       $([ -n "$GITHUB_TOKEN" ] && echo yes || echo no)
   Dashboard           https://$DASH_HOST  →  localhost:$DASH_PORT
 
   From here on, files are written to your system.
 SUMMARY
 confirm "Proceed?" y || { printf '\n  Aborted. Nothing was changed.\n\n'; exit 0; }
+
+# --- 5-0. Cloudflare Tunnel ---
+if [ "$TUNNEL_MODE" = "create" ]; then
+  step "Cloudflare Tunnel"
+
+  # 1. Authorise this machine. One browser click; writes ~/.cloudflared/cert.pem.
+  if [ -f "$HOME/.cloudflared/cert.pem" ]; then
+    ok "Already authorised with Cloudflare (~/.cloudflared/cert.pem)"
+  else
+    printf '  Open the link below in a browser on any device, sign in to Cloudflare,\n'
+    printf '  and pick %sany one%s of your domains. That only authorises this machine\n' "$B" "$R"
+    printf '  to create tunnels; the tunnel works for every domain on the account.\n\n'
+    cloudflared tunnel login </dev/tty || die "Cloudflare login didn't finish. Re-run ./setup.sh to try again."
+    [ -f "$HOME/.cloudflared/cert.pem" ] || die "Login finished but ~/.cloudflared/cert.pem is missing."
+    ok "Authorised"
+  fi
+
+  # 2. Create the tunnel, or reuse one with the same name from an earlier run.
+  CF_TUNNEL_ID="$(cloudflared tunnel list --name "$TUNNEL_NAME" --output json 2>/dev/null \
+    | python3 -c 'import json,sys
+try: print(json.load(sys.stdin)[0]["id"])
+except Exception: pass')"
+  if [ -n "$CF_TUNNEL_ID" ]; then
+    [ -f "$HOME/.cloudflared/$CF_TUNNEL_ID.json" ] || die "A tunnel named '$TUNNEL_NAME' already exists, but its credentials
+  file isn't on this machine. Re-run and pick another name, or delete it with:
+    cloudflared tunnel delete $TUNNEL_NAME"
+    ok "Reusing tunnel $TUNNEL_NAME ($CF_TUNNEL_ID)"
+  else
+    OUT="$(cloudflared tunnel create "$TUNNEL_NAME" 2>&1)" || die "Creating the tunnel failed:
+$OUT"
+    CF_TUNNEL_ID="$(echo "$OUT" | grep -oE "$UUID_RE" | tail -1)"
+    [ -n "$CF_TUNNEL_ID" ] || die "Couldn't read the new tunnel's ID from:
+$OUT"
+    ok "Created tunnel $TUNNEL_NAME ($CF_TUNNEL_ID)"
+  fi
+
+  # 3. Config + credentials under /etc/cloudflared, where the service and
+  #    proxdeploy-ingress both look. The ingress list starts as just the
+  #    catch-all; the "Tunnel ingress" step below fills it in.
+  sudo mkdir -p /etc/cloudflared
+  sudo install -m 0600 -o root -g root "$HOME/.cloudflared/$CF_TUNNEL_ID.json" \
+    "/etc/cloudflared/$CF_TUNNEL_ID.json" || die "Couldn't copy the tunnel credentials."
+  backup /etc/cloudflared/config.yml
+  printf 'tunnel: %s\ncredentials-file: /etc/cloudflared/%s.json\n\ningress:\n  - service: http_status:404\n' \
+    "$CF_TUNNEL_ID" "$CF_TUNNEL_ID" | sudo tee /etc/cloudflared/config.yml >/dev/null
+  sudo chmod 644 /etc/cloudflared/config.yml
+  ok "Wrote /etc/cloudflared/config.yml"
+
+  # 4. Run it as a service, replacing a dashboard-managed one if that's there.
+  if [ "$REMOTE_MANAGED" -eq 1 ]; then
+    sudo cloudflared service uninstall >/dev/null 2>&1
+    info "Removed the dashboard-managed cloudflared service"
+  fi
+  if systemctl list-unit-files cloudflared.service 2>/dev/null | grep -q cloudflared.service; then
+    info "cloudflared.service already installed"
+  else
+    sudo cloudflared --config /etc/cloudflared/config.yml service install >/dev/null 2>&1 \
+      || die "cloudflared service install failed. Try by hand:
+  sudo cloudflared --config /etc/cloudflared/config.yml service install"
+  fi
+  sudo systemctl enable cloudflared >/dev/null 2>&1
+  sudo systemctl restart cloudflared && sleep 2
+  systemctl is-active --quiet cloudflared \
+    && ok "cloudflared is running tunnel $TUNNEL_NAME" \
+    || warn "cloudflared isn't active yet — check: systemctl status cloudflared"
+fi
 
 # --- 5a. virtualenv ---
 step "Python environment"
@@ -544,24 +661,26 @@ done
 if [ -z "$CF_CONF" ]; then
   warn "No cloudflared config.yml found — add the ingress rules by hand."
   printf '    %sSee docs/SETUP.md, Step 6.%s\n' "$DIM" "$R"
-elif ! confirm "Add ingress rules for $DASH_HOST and *.$DOMAIN to $CF_CONF?" y; then
+elif ! confirm "Route $DASH_HOST and each domain (apex + wildcard) through $CF_CONF?" y; then
   info "Skipped. Add them yourself — see docs/SETUP.md, Step 6."
 else
   backup "$CF_CONF"
   TMP_CONF="$(mktemp)"
   sudo cat "$CF_CONF" > "$TMP_CONF"
 
-  DASH_HOST="$DASH_HOST" DASH_PORT="$DASH_PORT" DOMAIN="$DOMAIN" \
+  DASH_HOST="$DASH_HOST" DASH_PORT="$DASH_PORT" DOMAIN_LIST="$(echo "$DOMAINS_PAIRS" | sed 's/:[0-9a-f]*//g')" \
   python3 - "$TMP_CONF" <<'PY'
 import os, re, sys
 path = sys.argv[1]
 lines = open(path).read().splitlines()
-host, port, domain = os.environ["DASH_HOST"], os.environ["DASH_PORT"], os.environ["DOMAIN"]
+host, port = os.environ["DASH_HOST"], os.environ["DASH_PORT"]
+domains = [d for d in os.environ["DOMAIN_LIST"].split(",") if d]
 text = "\n".join(lines)
 
 want = [(host, f"http://localhost:{port}")]
-for h in (f"*.{domain}", domain):
-    want.append((h, "http://localhost:80"))
+for domain in domains:
+    for h in (f"*.{domain}", domain):
+        want.append((h, "http://localhost:80"))
 
 # Only add hostnames that aren't already routed somewhere.
 new = [(h, s) for h, s in want if not re.search(r'hostname:\s*"?' + re.escape(h) + r'"?\s*$', text, re.M)]
@@ -590,7 +709,7 @@ PY
   RC=$?
 
   if [ $RC -eq 0 ]; then
-    if cloudflared tunnel ingress validate --config "$TMP_CONF" >/dev/null 2>&1 \
+    if cloudflared tunnel --config "$TMP_CONF" ingress validate >/dev/null 2>&1 \
        || ! command -v cloudflared >/dev/null; then
       sudo install -m 0644 "$TMP_CONF" "$CF_CONF"
       ok "Updated $CF_CONF"
@@ -613,7 +732,7 @@ PY
 fi
 
 # --- 5f. dashboard DNS ---
-step "DNS for the dashboard"
+step "DNS records"
 ZONE_ID="$(echo "$DOMAINS_PAIRS" | tr ',' '\n' | grep "^$DOMAIN:" | cut -d: -f2)"
 CONTENT="$DOMAIN"
 [ -n "$CF_TUNNEL_ID" ] && CONTENT="$CF_TUNNEL_ID.cfargotunnel.com"
@@ -629,6 +748,41 @@ else
     warn "Could not create the DNS record — add it by hand:"
     info "CNAME  $DASH_HOST  →  $CONTENT  (proxied)"
   fi
+fi
+
+# Each domain's apex has to reach the tunnel too: a new site's record is a
+# CNAME to its apex (blog.example.com → example.com), so it goes wherever the
+# apex goes. On a fresh domain the apex has no record and every site would
+# fail to resolve. An apex that already points somewhere else (an existing
+# website) is left alone, with a warning, since taking it over would take that
+# website down.
+if [ -n "$CF_TUNNEL_ID" ]; then
+  TUNNEL_HOST="$CF_TUNNEL_ID.cfargotunnel.com"
+  IFS=',' read -r -a PAIRS <<< "$DOMAINS_PAIRS"
+  for pair in "${PAIRS[@]}"; do
+    d="${pair%%:*}"; z="${pair#*:}"
+    RESP="$(cf_api GET "/zones/$z/dns_records?name=$d")"
+    RTYPE="$(echo "$RESP" | json_get result 0 type)"
+    RCONT="$(echo "$RESP" | json_get result 0 content)"
+    if [ -z "$RTYPE" ]; then
+      BODY="{\"type\":\"CNAME\",\"name\":\"$d\",\"content\":\"$TUNNEL_HOST\",\"proxied\":true,\"ttl\":1}"
+      if [ "$(cf_api POST "/zones/$z/dns_records" "$BODY" | json_get success)" = "True" ]; then
+        ok "Created CNAME $d → tunnel (proxied)"
+      else
+        warn "Could not create the apex record for $d — add it by hand:"
+        info "CNAME  $d  →  $TUNNEL_HOST  (proxied)"
+      fi
+    elif [ "$RCONT" = "$TUNNEL_HOST" ]; then
+      ok "$d already points at this tunnel"
+    else
+      warn "$d already has a $RTYPE record ($RCONT), so it was left alone."
+      warn "Sites on $d follow the apex, so they won't reach this machine until"
+      warn "the apex points at the tunnel. Deploying a landing page to $d in"
+      warn "ProxDeploy does that, or change the record to: CNAME → $TUNNEL_HOST"
+    fi
+  done
+else
+  warn "No tunnel ID, so the domains' apex records weren't checked."
 fi
 
 # ─── Done ─────────────────────────────────────────────────────────────────────

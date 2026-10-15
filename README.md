@@ -83,12 +83,27 @@ which hands it to nginx. Your home IP address is never published.
 ## Requirements
 
 - A Linux box — designed for and tested on **Raspberry Pi OS (Bookworm / Trixie)** on a Pi 4, but any Debian-family machine works
-- **Python 3.9+**
-- **nginx**, already installed and serving
-- **cloudflared** with a configured tunnel
-- A domain on **Cloudflare** (free plan is fine)
-- A Cloudflare API token with **Edit zone DNS** on that domain
-- `git`
+- **Python 3.9+** (Raspberry Pi OS ships it)
+- A **Cloudflare account** (the free plan is fine)
+
+`setup.sh` installs nginx and cloudflared and creates the tunnel for you. You
+only need to do the things that can't be done from the Pi:
+
+### Before you run setup: three things in the Cloudflare dashboard
+
+1. **Add your domain to Cloudflare.** In the dashboard, choose **Add a domain**
+   and pick the Free plan.
+2. **Change your nameservers at your registrar** (Namecheap, Porkbun, GoDaddy,
+   and so on) to the two that Cloudflare shows you. This can take anywhere from
+   minutes to a day to take effect. You can run setup while you wait; it shows
+   the nameservers again if the domain isn't active yet.
+3. **Create an API token.** Go to **My Profile → API Tokens → Create Token →**
+   the **Edit zone DNS** template. Under **Zone Resources**, choose
+   **All zones from an account**, so you never have to edit the token when you
+   add a domain later. Copy the token; setup asks for it.
+
+If you deploy private GitHub repos, you'll also want a GitHub token with read
+access to them. Setup asks for that too, but it's optional.
 
 ---
 
@@ -96,26 +111,33 @@ which hands it to nginx. Your home IP address is never published.
 
 ### Automatic (recommended)
 
+On the Pi:
+
 ```bash
-cd ~
-git clone https://github.com/<you>/proxdeploy.git
-cd proxdeploy
+sudo apt install -y git
+git clone https://github.com/EmberGuild-Labs/proxdeploy.git ~/proxdeploy
+cd ~/proxdeploy
 ./setup.sh
 ```
 
 `setup.sh` asks a handful of questions and does the rest:
 
-- **Checks prerequisites** — python, git, curl, nginx, cloudflared; offers to `apt install` what's missing
+- **Installs what's missing**: python tooling, git, curl, **nginx**, and
+  **cloudflared** (from Cloudflare's own apt repository)
 - **Verifies your Cloudflare token** against the API before going any further
-- **Looks up your zone IDs automatically** — you type domain names, not hex strings
-- **Auto-detects your tunnel UUID** from `cloudflared tunnel list`
+- **Looks up your zone IDs automatically.** You type domain names, not hex
+  strings, and it tells you which nameservers to set if a domain isn't active yet
+- **Creates a Cloudflare Tunnel** if the machine doesn't have one. It shows
+  one link to open in a browser to authorise the Pi; that's the only manual
+  step. It then writes `/etc/cloudflared/config.yml` and runs the tunnel as a
+  service. An existing locally-managed tunnel is detected and reused
 - **Generates `SECRET_KEY` and `API_KEY`** for you and writes `.env` at mode `600`
 - **Asks for your dashboard password** (hidden, typed twice, 12+ characters) and stores only a bcrypt hash in `config.json`
 - **Installs `proxdeploy-ingress`**, the small root helper the **+ Domain** button uses to edit the tunnel config safely
 - **Builds the sudoers rule** from `which`-resolved paths, validates it with `visudo -c`, and refuses to install it if it doesn't parse
 - **Installs and starts the systemd service**, generated for your actual user and directory
-- **Adds tunnel ingress rules** for the dashboard and a `*.yourdomain` wildcard, keeping the `http_status:404` catch-all last
-- **Creates the dashboard's DNS record** via the Cloudflare API
+- **Adds tunnel ingress rules** for the dashboard, plus the apex and a `*.domain` wildcard for every domain, keeping the `http_status:404` catch-all last
+- **Creates DNS records**: one for the dashboard, and one for each domain's apex that has no record yet, pointing it at the tunnel (new sites CNAME to their apex, so the apex must reach the tunnel). It never overwrites an apex that already points somewhere
 - **Sets up start-on-boot** (see below)
 
 Nothing is written to your system until an explicit confirmation prompt, every
@@ -140,6 +162,11 @@ setup, **[docs/SETUP.md](docs/SETUP.md)** walks through every step individually.
 
 > A wildcard ingress rule (`*.example.com`) means new subdomains never need a
 > tunnel change again — only nginx and DNS, both of which ProxDeploy handles.
+
+> **Tunnels made in the Cloudflare dashboard don't work with ProxDeploy.**
+> Cloudflare's dashboard creates tunnels whose routes live in the cloud, so
+> there's no local config file for ProxDeploy to edit. If setup finds one, it
+> explains this and offers to replace it with a locally-managed tunnel.
 
 ### Surviving reboots and power cuts
 
@@ -189,7 +216,7 @@ Install it on your laptop (not the server):
 ```bash
 mkdir -p ~/.local/bin
 curl -o ~/.local/bin/proxdeploy \
-  https://raw.githubusercontent.com/<you>/proxdeploy/main/cli/proxdeploy
+  https://raw.githubusercontent.com/EmberGuild-Labs/proxdeploy/main/cli/proxdeploy
 chmod +x ~/.local/bin/proxdeploy
 proxdeploy setup
 ```
@@ -513,6 +540,14 @@ root credentials.
 ## Changelog
 
 ### October 2026
+- **Setup from a bare Pi.** `setup.sh` now installs nginx and cloudflared,
+  creates a locally-managed Cloudflare Tunnel (one browser click to
+  authorise), routes every domain through it, and points each domain's empty
+  apex at the tunnel. It also prints the nameservers to set when a domain
+  isn't active on Cloudflare yet, and explains how to switch over from a
+  tunnel managed in the Cloudflare dashboard.
+- Fixed the installer's `cloudflared ingress validate` call. The old argument
+  order may have made it reject a valid config.
 - **Redesigned dashboard.** New light and dark UI with shared styles in
   `static/ui.css` and helpers in `static/ui.js`. Every URL is relative, so the
   dashboard also works when it's mounted under a path.

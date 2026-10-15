@@ -1,9 +1,11 @@
 # ProxDeploy — Setup Guide
 
 > **Most people should just run `./setup.sh`.** It does everything in this
-> document interactively — verifies your Cloudflare token, looks up zone IDs
-> from domain names, generates your keys, validates the sudoers rule before
-> installing it, edits the tunnel ingress, and sets up start-on-boot. It backs
+> document interactively. It installs nginx and cloudflared, creates the
+> Cloudflare Tunnel, verifies your Cloudflare token, looks up zone IDs from
+> domain names, generates your keys, sets the dashboard password, validates
+> the sudoers rule before installing it, routes your domains through the
+> tunnel, creates the DNS records, and sets up start-on-boot. It backs
 > up every file it replaces and is safe to re-run.
 >
 > This guide is for doing it by hand, or for understanding what the script did.
@@ -30,9 +32,37 @@ venv module is missing:
 sudo apt update && sudo apt install -y python3-pip python3-venv git
 ```
 
-If **nginx** or **cloudflared** are missing, install and configure those first —
-ProxDeploy manages them, it doesn't install them. You need a working Cloudflare
-Tunnel before ProxDeploy is useful.
+Install nginx, and cloudflared from Cloudflare's apt repository
+(<https://pkg.cloudflare.com/>):
+
+```bash
+sudo apt install -y nginx
+sudo mkdir -p --mode=0755 /usr/share/keyrings
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt update && sudo apt install -y cloudflared
+```
+
+Then create a **locally-managed** tunnel. ProxDeploy edits its config file,
+so a tunnel created in the Cloudflare dashboard won't work:
+
+```bash
+cloudflared tunnel login                  # open the link it prints, pick any domain
+cloudflared tunnel create proxdeploy      # note the UUID it prints
+sudo mkdir -p /etc/cloudflared
+sudo install -m 600 ~/.cloudflared/<UUID>.json /etc/cloudflared/
+sudo tee /etc/cloudflared/config.yml >/dev/null <<EOF
+tunnel: <UUID>
+credentials-file: /etc/cloudflared/<UUID>.json
+
+ingress:
+  - service: http_status:404
+EOF
+sudo cloudflared --config /etc/cloudflared/config.yml service install
+sudo systemctl enable --now cloudflared
+```
+
+Step 6 fills in the ingress rules.
 
 ---
 
@@ -40,7 +70,7 @@ Tunnel before ProxDeploy is useful.
 
 ```bash
 cd ~
-git clone https://github.com/<you>/proxdeploy.git
+git clone https://github.com/EmberGuild-Labs/proxdeploy.git
 cd proxdeploy
 ```
 
@@ -265,12 +295,18 @@ sudo systemctl restart cloudflared
 sudo systemctl status cloudflared --no-pager
 ```
 
-You also need a DNS record for the dashboard hostname itself. Either add a
-proxied `CNAME deploy → example.com` in the Cloudflare dashboard, or run:
+You also need DNS records for the dashboard hostname **and for the domain's
+apex**. New sites CNAME to the apex (`blog.example.com → example.com`), so the
+apex has to point at the tunnel or no site will resolve:
 
 ```bash
 cloudflared tunnel route dns <tunnel-name> deploy.example.com
+cloudflared tunnel route dns <tunnel-name> example.com
 ```
+
+If the apex already serves a website somewhere else, leave it alone and accept
+that subdomain sites follow it. Alternatively, deploy a landing page to the
+apex through ProxDeploy, which repoints it.
 
 ---
 
@@ -298,7 +334,7 @@ On your **laptop**, not the server:
 ```bash
 mkdir -p ~/.local/bin
 curl -o ~/.local/bin/proxdeploy \
-  https://raw.githubusercontent.com/<you>/proxdeploy/main/cli/proxdeploy
+  https://raw.githubusercontent.com/EmberGuild-Labs/proxdeploy/main/cli/proxdeploy
 chmod +x ~/.local/bin/proxdeploy
 proxdeploy setup
 ```
