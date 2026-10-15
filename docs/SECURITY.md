@@ -34,7 +34,7 @@ traffic arrives through the Cloudflare Tunnel and is handed to nginx. There is
 no open port on your router, and your home IP address is never published in
 DNS — every record is a proxied CNAME.
 
-**Passwords are bcrypt-hashed.** Set on first run, stored in `config.json`. The
+**Passwords are bcrypt-hashed.** Set by `setup.sh` before the dashboard is exposed (change it with `./setup.sh --password`), stored in `config.json`. The
 plaintext is never written anywhere.
 
 **API keys are compared in constant time.** `secrets.compare_digest`, not `==`,

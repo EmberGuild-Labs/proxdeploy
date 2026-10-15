@@ -1,1834 +1,1089 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <title>ProxDeploy</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
-
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  :root {
-    --bg:        #0b0e14;
-    --surface:   #121620;
-    --surface2:  #171c28;
-    --border:    #1e2535;
-    --ember:     #f97316;
-    --ember-dim: #7c3a0e;
-    --text:      #e2e8f0;
-    --muted:     #64748b;
-    --green:     #22c55e;
-    --yellow:    #eab308;
-    --red:       #ef4444;
-    --blue:      #3b82f6;
-  }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Inter', sans-serif;
-    min-height: 100vh;
-  }
-
-  /* Grid background */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background-image:
-      linear-gradient(var(--border) 1px, transparent 1px),
-      linear-gradient(90deg, var(--border) 1px, transparent 1px);
-    background-size: 40px 40px;
-    opacity: 0.3;
-    pointer-events: none;
-    z-index: 0;
-  }
-
-  /* ── Nav ── */
-  nav {
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    background: rgba(11,14,20,0.9);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
-    padding: 0 32px;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .logo {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .logo-icon {
-    width: 32px;
-    height: 32px;
-    background: var(--ember);
-    border-radius: 7px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 700;
-    font-size: 15px;
-    color: #fff;
-  }
-
-  .logo-text {
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 700;
-    font-size: 16px;
-    letter-spacing: -0.5px;
-  }
-
-  .logo-text span { color: var(--ember); }
-
-  .nav-right {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
-
-  .domain-badge {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    color: var(--muted);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    padding: 4px 10px;
-    border-radius: 20px;
-  }
-
-  .domain-badge span { color: var(--ember); }
-
-  .logout-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    padding: 6px 14px;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.2s;
-    font-family: 'Inter', sans-serif;
-  }
-
-  .logout-btn:hover { border-color: var(--ember); color: var(--ember); }
-
-  /* ── Layout ── */
-  main {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 40px 32px;
-    position: relative;
-    z-index: 1;
-  }
-
-  /* ── Deploy form ── */
-  .deploy-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 28px 32px;
-    margin-bottom: 40px;
-  }
-
-  .deploy-card h2 {
-    font-size: 16px;
-    font-weight: 600;
-    margin-bottom: 4px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .deploy-card h2::before {
-    content: '';
-    width: 3px;
-    height: 18px;
-    background: var(--ember);
-    border-radius: 2px;
-    display: inline-block;
-  }
-
-  .deploy-card p {
-    color: var(--muted);
-    font-size: 13px;
-    margin-bottom: 24px;
-  }
-
-  .form-row {
-    display: grid;
-    grid-template-columns: 1fr 200px 90px 160px auto;
-    gap: 12px;
-    align-items: end;
-  }
-
-  .field { display: flex; flex-direction: column; gap: 6px; }
-
-  .field label {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--muted);
-  }
-
-  .field input {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 14px;
-    color: var(--text);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-
-  .field input:focus { border-color: var(--ember); }
-  .field input::placeholder { color: var(--muted); }
-
-  .subdomain-wrap {
-    display: flex;
-    align-items: center;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-    transition: border-color 0.2s;
-  }
-
-  .subdomain-wrap:focus-within { border-color: var(--ember); }
-
-  .subdomain-wrap input {
-    background: transparent;
-    border: none;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .subdomain-suffix {
-    padding: 10px 12px 10px 0;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    color: var(--muted);
-    white-space: nowrap;
-  }
-
-  /* Domain picker sits where the static suffix used to — styled to still read
-     as part of the field, not as a separate control. */
-  .domain-select {
-    appearance: none;
-    background: transparent;
-    border: none;
-    border-left: 1px solid var(--border);
-    padding: 10px 26px 10px 10px;
-    margin-left: 4px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    color: var(--muted);
-    cursor: pointer;
-    outline: none;
-    /* caret */
-    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
-                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-    background-position: calc(100% - 14px) 18px, calc(100% - 9px) 18px;
-    background-size: 5px 5px, 5px 5px;
-    background-repeat: no-repeat;
-  }
-  .domain-select:hover { color: var(--text); }
-  .domain-select option { background: var(--card); color: var(--text); }
-
-  .domain-badge select {
-    appearance: none;
-    background: transparent;
-    border: none;
-    color: var(--ember);
-    font: inherit;
-    cursor: pointer;
-    outline: none;
-  }
-  .domain-badge select option { background: var(--card); color: var(--text); }
-
-  .btn-deploy {
-    background: var(--ember);
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    padding: 11px 22px;
-    font-family: 'Inter', sans-serif;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.2s, transform 0.1s;
-  }
-
-  .btn-deploy:hover { background: #ea6a0a; }
-  .btn-deploy:active { transform: scale(0.97); }
-  .btn-deploy:disabled { background: var(--ember-dim); cursor: not-allowed; }
-
-  /* ── Toast ── */
-  #toast {
-    position: fixed;
-    bottom: 28px;
-    right: 28px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 20px;
-    font-size: 14px;
-    z-index: 999;
-    display: none;
-    max-width: 340px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-    animation: slideUp 0.25s ease;
-  }
-
-  @keyframes slideUp {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-
-  #toast.ok  { border-color: var(--green);  color: var(--green); }
-  #toast.err { border-color: var(--red);    color: var(--red); }
-  #toast.inf { border-color: var(--ember);  color: var(--ember); }
-
-  /* ── Services ── */
-  .section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 16px;
-  }
-
-  .section-title {
-    font-size: 14px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--muted);
-  }
-
-  .service-count {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    font-size: 12px;
-    padding: 3px 10px;
-    border-radius: 20px;
-    font-family: 'JetBrains Mono', monospace;
-  }
-
-  .services-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 16px;
-  }
-
-  .service-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px 22px;
-    transition: border-color 0.2s;
-  }
-
-  .service-card:hover { border-color: #2d3a52; }
-
-  .service-top {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    margin-bottom: 14px;
-  }
-
-  .service-name {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-  }
-
-  .service-url {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: var(--ember);
-    margin-top: 3px;
-    text-decoration: none;
-  }
-
-  .service-url:hover { text-decoration: underline; }
-
-  .status-dot {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    font-weight: 500;
-    padding: 4px 10px;
-    border-radius: 20px;
-    white-space: nowrap;
-  }
-
-  .status-dot::before {
-    content: '';
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-
-  .status-online  { background: rgba(34,197,94,0.1);  color: var(--green);  }
-  .status-online::before  { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  .status-deploying { background: rgba(234,179,8,0.1);  color: var(--yellow); }
-  .status-deploying::before { background: var(--yellow); animation: pulse 1.2s infinite; }
-  .status-updating  { background: rgba(59,130,246,0.1); color: var(--blue); }
-  .status-updating::before  { background: var(--blue);   animation: pulse 1.2s infinite; }
-  .status-error   { background: rgba(239,68,68,0.1);  color: var(--red); }
-  .status-error::before   { background: var(--red); }
-  .status-paused  { background: rgba(100,116,139,0.15); color: var(--muted); }
-  .status-paused::before  { background: var(--muted); }
-
-  .service-card.paused { opacity: 0.65; }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-
-  .service-meta {
-    font-size: 12px;
-    color: var(--muted);
-    margin-bottom: 10px;
-    line-height: 1.6;
-    font-family: 'JetBrains Mono', monospace;
-    word-break: break-all;
-  }
-
-  .service-res {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px 14px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: var(--muted);
-    margin-bottom: 14px;
-    padding: 8px 10px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-  }
-
-  .service-res b { color: var(--text); font-weight: 600; }
-
-  .service-actions {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-  }
-
-  .btn-sm {
-    padding: 8px 6px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    border-radius: 7px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    font-family: 'Inter', sans-serif;
-    transition: all 0.2s;
-    background: var(--bg);
-    color: var(--text);
-  }
-
-  .btn-sm:hover { border-color: var(--ember); color: var(--ember); }
-  .btn-sm.danger:hover { border-color: var(--red); color: var(--red); }
-  .btn-sm.log-btn:hover { border-color: var(--blue); color: var(--blue); }
-  .btn-sm.restart-btn:hover { border-color: var(--yellow); color: var(--yellow); }
-
-  /* ── Stats strip ── */
-  .stats-strip {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 8px 32px;
-    display: flex;
-    align-items: center;
-    gap: 32px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    position: relative;
-    z-index: 90;
-  }
-
-  .stat-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .stat-label {
-    color: var(--muted);
-    min-width: 32px;
-  }
-
-  .stat-bar-wrap {
-    width: 120px;
-    height: 5px;
-    background: var(--border);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-
-  .stat-bar {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.5s ease;
-  }
-
-  .stat-bar.cpu { background: var(--ember); }
-  .stat-bar.ram { background: var(--blue); }
-
-  .stat-bar.warn  { background: var(--yellow); }
-  .stat-bar.crit  { background: var(--red); }
-
-  .stat-val { color: var(--text); min-width: 68px; }
-
-  /* ── Log drawer ── */
-  #log-drawer {
-    position: fixed;
-    inset: 0;
-    z-index: 200;
-    display: none;
-  }
-
-  #log-overlay {
-    position: absolute;
-    inset: 0;
-    background: rgba(0,0,0,0.6);
-    backdrop-filter: blur(4px);
-  }
-
-  #log-panel {
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: 560px;
-    background: var(--surface);
-    border-left: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-  }
-
-  #log-header {
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  #log-title {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 14px;
-    font-weight: 600;
-  }
-
-  #log-close {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    width: 30px;
-    height: 30px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-  }
-
-  #log-close:hover { border-color: var(--red); color: var(--red); }
-
-  .log-tabs {
-    display: flex;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .log-tab {
-    padding: 10px 20px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    color: var(--muted);
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    transition: all 0.2s;
-    background: transparent;
-    border-top: none;
-    border-left: none;
-    border-right: none;
-    font-family: 'Inter', sans-serif;
-  }
-
-  .log-tab.active { color: var(--ember); border-bottom-color: var(--ember); }
-
-  #log-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    line-height: 1.8;
-  }
-
-  .log-line { color: var(--text); }
-  .log-line.err { color: var(--red); }
-  .log-line.warn { color: var(--yellow); }
-  .log-line.empty { color: var(--muted); font-style: italic; }
-
-  /* ── Confirm modal ── */
-  #confirm-modal {
-    position: fixed;
-    inset: 0;
-    z-index: 300;
-    display: none;
-    align-items: center;
-    justify-content: center;
-  }
-
-  #confirm-overlay {
-    position: absolute;
-    inset: 0;
-    background: rgba(0,0,0,0.7);
-    backdrop-filter: blur(4px);
-  }
-
-  #confirm-box {
-    position: relative;
-    z-index: 1;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 28px 32px;
-    width: 360px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-  }
-
-  #confirm-box h3 { margin-bottom: 10px; }
-  #confirm-box p  { color: var(--muted); font-size: 14px; margin-bottom: 24px; line-height: 1.5; }
-
-  .confirm-btns { display: flex; gap: 10px; }
-  .confirm-btns button {
-    flex: 1;
-    padding: 10px;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: 'Inter', sans-serif;
-    transition: all 0.2s;
-  }
-
-  #confirm-cancel, #edit-cancel { background: var(--bg); border: 1px solid var(--border); color: var(--text); }
-  #confirm-cancel:hover, #edit-cancel:hover { border-color: var(--muted); }
-  #edit-box .confirm-btns button { flex: 1; padding: 10px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s; }
-  #confirm-ok    { background: var(--red); border: 1px solid var(--red); color: #fff; }
-  #confirm-ok:hover { background: #dc2626; }
-
-  /* ── View tabs (Sites / Redirects) ── */
-  .view-tabs {
-    display: flex;
-    gap: 4px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 3px;
-  }
-
-  .view-tab {
-    background: transparent;
-    border: none;
-    color: var(--muted);
-    font-family: 'Inter', sans-serif;
-    font-size: 13px;
-    font-weight: 600;
-    padding: 6px 16px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .view-tab:hover { color: var(--text); }
-  .view-tab.active { background: var(--ember); color: #fff; }
-
-  .view-tab .tab-count {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    font-weight: 400;
-    opacity: 0.75;
-    margin-left: 6px;
-  }
-
-  /* ── Sort select ── */
-  .sort-select {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-family: 'Inter', sans-serif;
-    font-size: 13px;
-    padding: 6px 10px;
-    border-radius: 7px;
-    cursor: pointer;
-    outline: none;
-  }
-
-  .sort-select:hover, .sort-select:focus { border-color: var(--ember); }
-
-  /* ── Project groups ── */
-  .project-group { margin-bottom: 28px; }
-
-  .project-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 4px;
-    margin-bottom: 12px;
-    border-bottom: 1px solid var(--border);
-    cursor: pointer;
-    user-select: none;
-  }
-
-  .project-header:hover .project-name { color: var(--ember); }
-
-  .project-caret {
-    font-size: 11px;
-    color: var(--muted);
-    transition: transform 0.2s;
-    display: inline-block;
-  }
-
-  .project-group.collapsed .project-caret { transform: rotate(-90deg); }
-  .project-group.collapsed .services-grid { display: none; }
-
-  .project-name {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    transition: color 0.2s;
-  }
-
-  .project-count {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  /* ── Edit modal ── */
-  #edit-modal {
-    position: fixed;
-    inset: 0;
-    z-index: 300;
-    display: none;
-    align-items: center;
-    justify-content: center;
-  }
-
-  #edit-overlay {
-    position: absolute;
-    inset: 0;
-    background: rgba(0,0,0,0.7);
-    backdrop-filter: blur(4px);
-  }
-
-  #edit-box {
-    position: relative;
-    z-index: 1;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 26px 30px;
-    width: 480px;
-    max-width: calc(100vw - 32px);
-    max-height: 85vh;
-    overflow-y: auto;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-  }
-
-  .manage-section {
-    border-top: 1px solid var(--border);
-    margin-top: 20px;
-    padding-top: 16px;
-  }
-
-  .manage-section h4 {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--muted);
-    margin-bottom: 4px;
-  }
-
-  .manage-section .hint { margin-bottom: 12px; }
-
-  .ext-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 8px 10px;
-    margin-bottom: 8px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-  }
-
-  .ext-row .ext-path { color: var(--ember); font-weight: 600; }
-  .ext-row .ext-info { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ext-row button {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    border-radius: 5px;
-    padding: 3px 8px;
-    font-size: 11px;
-    cursor: pointer;
-    font-family: 'Inter', sans-serif;
-    transition: all 0.2s;
-  }
-  .ext-row button:hover { border-color: var(--ember); color: var(--ember); }
-  .ext-row button.danger:hover { border-color: var(--red); color: var(--red); }
-
-  .manage-add-row {
-    display: grid;
-    grid-template-columns: 90px 1fr 64px auto;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .manage-add-row input {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 8px 10px;
-    color: var(--text);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    outline: none;
-    min-width: 0;
-  }
-
-  .manage-add-row input:focus { border-color: var(--ember); }
-
-  .manage-add-row .btn-add {
-    background: var(--ember);
-    color: #fff;
-    border: none;
-    border-radius: 7px;
-    padding: 8px 14px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: 'Inter', sans-serif;
-  }
-
-  .manage-add-row .btn-add:hover { background: #ea6a0a; }
-
-  .ext-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 14px;
-  }
-
-  .ext-chip {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: var(--ember);
-    background: rgba(249,115,22,0.08);
-    border: 1px solid var(--ember-dim);
-    border-radius: 20px;
-    padding: 2px 10px;
-  }
-
-  #edit-box h3 { margin-bottom: 6px; }
-  #edit-box .hint { color: var(--muted); font-size: 12px; margin-bottom: 18px; line-height: 1.5; }
-  #edit-box .field { margin-bottom: 14px; }
-  #edit-box .field input { width: 100%; }
-  #edit-save { background: var(--ember); border: 1px solid var(--ember); color: #fff; }
-  #edit-save:hover { background: #ea6a0a; }
-
-  /* ── Empty state ── */
-  .empty-state {
-    text-align: center;
-    padding: 64px 0;
-    color: var(--muted);
-  }
-
-  .empty-state .icon {
-    font-size: 40px;
-    margin-bottom: 16px;
-    display: block;
-  }
-
-  .empty-state h3 { color: var(--text); margin-bottom: 8px; }
-  .empty-state p  { font-size: 14px; }
-</style>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e8590c'/%3E%3Ctext x='16' y='22' font-family='-apple-system,sans-serif' font-size='18' font-weight='700' fill='white' text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="{{ url_for('static', filename='ui.css') }}">
 </head>
 <body>
 
-<nav>
-  <div class="logo">
-    <div class="logo-icon">P</div>
-    <div class="logo-text">Prox<span>Deploy</span></div>
+<header class="toolbar">
+  <div class="toolbar-inner">
+    <a class="brand" href="{{ url_for('index') }}"><span class="brand-mark" aria-hidden="true">P</span><span class="brand-name">ProxDeploy</span></a>
+    {% if node_info|selectattr('dashboard')|list|length > 1 %}
+    <nav class="switcher" aria-label="Machines">
+      {% for n in node_info if n.dashboard %}
+      <a href="{{ n.dashboard }}" {% if n.local %}aria-current="page"{% endif %}>{{ n.label }}</a>
+      {% endfor %}
+    </nav>
+    {% endif %}
+    <span class="spacer"></span>
+    <button class="btn primary" id="new-btn" aria-haspopup="menu" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New
+    </button>
+    <button class="icon-btn" id="account-btn" aria-haspopup="menu" aria-expanded="false" aria-label="More options">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/></svg>
+    </button>
   </div>
-  <div class="nav-right">
-    <div class="domain-badge">
-      <span>{% for d in domains %}*.{{ d }}{% if not loop.last %} · {% endif %}{% endfor %}</span>
-    </div>
-    <button class="logout-btn" onclick="location.href='logout'">Sign out</button>
-  </div>
-</nav>
+</header>
 
-<!-- System stats strip -->
-<div class="stats-strip">
-  <div class="stat-item">
-    <span class="stat-label">CPU</span>
-    <div class="stat-bar-wrap"><div class="stat-bar cpu" id="cpu-bar" style="width:0%"></div></div>
-    <span class="stat-val" id="cpu-val">—</span>
-  </div>
-  <div class="stat-item">
-    <span class="stat-label">RAM</span>
-    <div class="stat-bar-wrap"><div class="stat-bar ram" id="ram-bar" style="width:0%"></div></div>
-    <span class="stat-val" id="ram-val">—</span>
-  </div>
-</div>
-
-<main>
-  <!-- Deploy form -->
-  <div class="deploy-card">
-    <h2>Deploy a new service</h2>
-    <p>Paste a GitHub repo URL, pick a domain and a subdomain — ProxDeploy handles the rest. Leave the subdomain empty to deploy the domain's landing page.</p>
-    <div class="form-row">
-      <div class="field">
-        <label>GitHub Repo URL</label>
-        <input type="text" id="repo-url" placeholder="https://github.com/yourname/my-site">
-      </div>
-      <div class="field">
-        <label>Subdomain</label>
-        <div class="subdomain-wrap">
-          <input type="text" id="subdomain" placeholder="my-site" oninput="updateDeployHint()">
-          <select class="domain-select" id="deploy-domain" onchange="updateDeployHint()">
-            {% for d in domains %}<option value="{{ d }}">.{{ d }}</option>{% endfor %}
-          </select>
-        </div>
-        <span class="hint" id="deploy-hint" style="font-size:11px; margin-top:4px; display:block;"></span>
-      </div>
-      <div class="field">
-        <label>Port (optional)</label>
-        <input type="number" id="port" placeholder="3000" min="1" max="65535">
-      </div>
-      <div class="field">
-        <label>Project (optional)</label>
-        <input type="text" id="project" placeholder="Project A" list="project-list">
-        <datalist id="project-list"></datalist>
-      </div>
-      <button class="btn-deploy" id="deploy-btn" onclick="deployService()">Deploy →</button>
-    </div>
-    <div class="form-row" style="grid-template-columns: 200px 1fr 110px auto; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);">
-      <div class="field">
-        <label>Or add a redirect</label>
-        <div class="subdomain-wrap">
-          <input type="text" id="redir-sub" placeholder="example">
-          <select class="domain-select" id="redir-domain">
-            {% for d in domains %}<option value="{{ d }}">.{{ d }}</option>{% endfor %}
-          </select>
-        </div>
-      </div>
-      <div class="field">
-        <label>Redirects to</label>
-        <input type="text" id="redir-target" placeholder="example.com/somewhere or any URL">
-      </div>
-      <div class="field">
-        <label>Keep path</label>
-        <label style="display:flex; align-items:center; gap:8px; padding:10px 0; text-transform:none; letter-spacing:0; font-size:12px; color:var(--muted); cursor:pointer;">
-          <input type="checkbox" id="redir-preserve" style="accent-color: var(--ember);"> /foo → target/foo
-        </label>
-      </div>
-      <button class="btn-deploy" onclick="addRedirect()">Redirect →</button>
+<main class="page">
+  <div class="page-head">
+    <div class="titles">
+      <h1 class="large-title" id="page-title">Sites</h1>
+      <p class="subtitle" id="summary">Loading…</p>
     </div>
   </div>
 
-  <!-- Services -->
-  <div class="section-header">
-    <div class="view-tabs">
-      <button class="view-tab active" id="tab-sites" onclick="setView('sites')">Sites<span class="tab-count" id="count-sites"></span></button>
-      <button class="view-tab" id="tab-redirects" onclick="setView('redirects')">Redirects<span class="tab-count" id="count-redirects"></span></button>
+  <section class="fleet" id="fleet" aria-label="Machines"></section>
+
+  <div class="controls">
+    <label class="search">
+      <span class="sr-only">Search sites</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input class="input" id="q" type="search" placeholder="Search" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+    </label>
+    <div class="segmented" role="group" aria-label="View">
+      <button type="button" data-view="sites" aria-pressed="true">Sites<span class="count" id="n-sites"></span></button>
+      <button type="button" data-view="redirects" aria-pressed="false">Redirects<span class="count" id="n-redirects"></span></button>
     </div>
-    <div style="display:flex; align-items:center; gap:12px;">
-      <select class="sort-select" id="sort-select" onchange="setSort(this.value)">
-        <option value="alpha">Sort: A → Z</option>
-        <option value="oldest">Sort: Longest running</option>
-        <option value="newest">Sort: Recently added</option>
-        <option value="cpu">Sort: Most CPU</option>
-        <option value="ram">Sort: Most RAM</option>
+    <span class="spacer"></span>
+    <label><span class="sr-only">Filter</span>
+      <select class="input" id="filter">
+        <option value="all">All statuses</option>
+        <option value="online">Online</option>
+        <option value="paused">Paused</option>
+        <option value="attention">Needs attention</option>
       </select>
-      <div class="service-count" id="svc-count">0 sites</div>
-    </div>
+    </label>
+    <label><span class="sr-only">Sort</span>
+      <select class="input" id="sort">
+        <option value="alpha">Name</option>
+        <option value="newest">Recently updated</option>
+        <option value="oldest">Longest running</option>
+        <option value="cpu">CPU</option>
+        <option value="ram">Memory</option>
+        <option value="disk">Disk</option>
+      </select>
+    </label>
   </div>
-  <div id="services-groups">
-    <div class="empty-state" id="empty-state">
-      <span class="icon">🚀</span>
-      <h3>No services deployed yet</h3>
-      <p>Deploy your first repo above to get started.</p>
-    </div>
+
+  <div id="groups" aria-live="off">
+    <div class="list" aria-hidden="true"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
   </div>
 </main>
 
-<!-- Toast -->
-<div id="toast"></div>
-
-<!-- Log drawer -->
-<div id="log-drawer">
-  <div id="log-overlay" onclick="closeLogs()"></div>
-  <div id="log-panel">
-    <div id="log-header">
-      <div id="log-title">Logs — <span id="log-svc"></span></div>
-      <button id="log-close" onclick="closeLogs()">✕</button>
-    </div>
-    <div class="log-tabs">
-      <button class="log-tab active" onclick="switchTab('all')">All output</button>
-      <button class="log-tab" onclick="switchTab('errors')">Errors & warnings</button>
-    </div>
-    <div id="log-body"></div>
-  </div>
-</div>
-
-<!-- Edit modal -->
-<div id="edit-modal">
-  <div id="edit-overlay" onclick="closeEdit()"></div>
-  <div id="edit-box">
-    <h3>Manage <span id="edit-name"></span></h3>
-    <p class="hint">Group this site into a project folder, and (for dynamic sites) set its systemd service so Pause/Resume and Restart can stop/start the app process.</p>
-    <div class="field">
-      <label>Project folder</label>
-      <input type="text" id="edit-project" placeholder="e.g. Project A" list="project-list">
-    </div>
-    <div class="field">
-      <label>Systemd service (optional)</label>
-      <input type="text" id="edit-service" placeholder="e.g. fuzzbox.service">
-    </div>
-    <div class="confirm-btns">
-      <button id="edit-cancel" onclick="closeEdit()">Close</button>
-      <button id="edit-save" onclick="saveEdit()">Save settings</button>
-    </div>
-
-    <div class="manage-section" id="sec-redir" style="display:none;">
-      <h4>Redirect target</h4>
-      <p class="hint">Where should <span id="redir-example"></span> send visitors?</p>
-      <div class="manage-add-row" style="grid-template-columns: 1fr auto auto;">
-        <input type="text" id="edit-redir-target" placeholder="https://…">
-        <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); cursor:pointer;">
-          <input type="checkbox" id="edit-redir-preserve" style="accent-color: var(--ember);"> keep path
-        </label>
-        <button class="btn-add" onclick="saveRedirect()">Save</button>
+<!-- ── Deploy a site ──────────────────────────────────────────────────────── -->
+<dialog class="sheet" id="deploy-sheet" aria-labelledby="deploy-title">
+  <form method="dialog" id="deploy-form" novalidate>
+    <div class="sheet-head">
+      <div class="titles">
+        <h2 class="sheet-title" id="deploy-title">Deploy a site</h2>
+        <p class="sheet-sub">ProxDeploy clones the repo, writes the nginx config and adds the DNS record.</p>
       </div>
+      <button class="icon-btn" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
-
-    <div class="manage-section" id="sec-ext">
-      <h4>Path extensions</h4>
-      <p class="hint">Serve another repo under a path of this domain, like <span id="ext-example"></span>. Leave the port empty for a static repo, or set a port to proxy a dynamic app.</p>
-      <div id="ext-list"></div>
-      <div class="manage-add-row">
-        <input type="text" id="ext-path" placeholder="/blog">
-        <input type="text" id="ext-repo" placeholder="https://github.com/…">
-        <input type="number" id="ext-port" placeholder="port" min="1" max="65535">
-        <button class="btn-add" onclick="addExtension()">Add</button>
-      </div>
-    </div>
-
-    <div class="manage-section" id="sec-sub">
-      <h4>Nested subdomains</h4>
-      <p class="hint">Deploy a whole new site under this one, like <span id="sub-example"></span>. It shows up as its own card. <b style="color:var(--yellow)">Heads up:</b> Cloudflare's free SSL certificate only covers one level of subdomain, so browsers may show a certificate warning on nested subdomains.</p>
-      <div id="sub-list"></div>
-      <div class="manage-add-row" style="grid-template-columns: 1fr 1.4fr 64px auto;">
-        <input type="text" id="sub-name" placeholder="api">
-        <input type="text" id="sub-repo" placeholder="https://github.com/…">
-        <input type="number" id="sub-port" placeholder="port" min="1" max="65535">
-        <button class="btn-add" onclick="addSubdomain()">Add</button>
-      </div>
-    </div>
-
-    <div class="manage-section" id="sec-conv">
-      <h4>Convert / move this site</h4>
-      <p class="hint">Move this site <b>without re-uploading anything</b> — the files stay where they are. Pick a parent site and a name, then choose: <b>→ /path</b> makes it <span id="conv-example-ext"></span>, <b>→ subdomain</b> makes it <span id="conv-example-sub"></span>, and <b>→ standalone</b> renames it to just <span id="conv-example-solo"></span> (use this to revert a nested subdomain, or to rename any site).</p>
-      <div class="manage-add-row" style="grid-template-columns: 1fr 90px 130px auto auto auto;">
-        <select id="conv-parent" class="sort-select" onchange="updateConvExamples()"></select>
-        <input type="text" id="conv-name" placeholder="name" oninput="updateConvExamples()">
-        <select id="conv-domain" class="sort-select" onchange="updateConvExamples()">
-          {% for d in domains %}<option value="{{ d }}">.{{ d }}</option>{% endfor %}
-        </select>
-        <button class="btn-add" onclick="convertSite('extension')">→ /path</button>
-        <button class="btn-add" onclick="convertSite('subdomain')">→ subdomain</button>
-        <button class="btn-add" onclick="convertSite('standalone')">→ standalone</button>
-      </div>
-      <p class="hint" style="margin-top:8px">The domain picker applies to <b>→ standalone</b> — use it to move a site to your other domain, or leave the name blank to make it that domain's landing page. <b>→ /path</b> and <b>→ subdomain</b> always follow the parent site's domain.</p>
-    </div>
-  </div>
-</div>
-
-<!-- Confirm modal -->
-<div id="confirm-modal">
-  <div id="confirm-overlay"></div>
-  <div id="confirm-box">
-    <h3>Remove service?</h3>
-    <p id="confirm-text"></p>
-    <div class="confirm-btns">
-      <button id="confirm-cancel" onclick="closeConfirm()">Cancel</button>
-      <button id="confirm-ok" onclick="confirmDelete()">Remove</button>
-    </div>
-  </div>
-</div>
-
-<script>
-// ── Domains ───────────────────────────────────────────────────────────────────
-const DOMAINS        = {{ domains|tojson }};
-const DEFAULT_DOMAIN = {{ domain|tojson }};
-// Server-rendered hostnames for the first paint; api/status refreshes these.
-const INITIAL_FQDNS  = {{ fqdns|tojson }};
-
-/* A site's key is its bare name on the default domain and its full hostname
-   everywhere else, so never build a hostname by concatenation — ask here. */
-function fqdnOf(name) {
-  const svc = (lastServices || {})[name];
-  if (svc && svc.fqdn) return svc.fqdn;
-  if (INITIAL_FQDNS[name]) return INITIAL_FQDNS[name];
-  return `${name}.${DEFAULT_DOMAIN}`;
-}
-
-function domainOf(name) {
-  const svc = (lastServices || {})[name];
-  return (svc && svc.domain) || DEFAULT_DOMAIN;
-}
-
-/* The label under the subdomain box: shows exactly what will be deployed,
-   including the apex case where the subdomain is left blank. */
-function updateDeployHint() {
-  const sub = document.getElementById('subdomain').value.trim().replace(/^\.+|\.+$/g, '');
-  const dom = document.getElementById('deploy-domain').value;
-  const hint = document.getElementById('deploy-hint');
-  hint.textContent = sub ? `→ ${sub}.${dom}` : `→ ${dom} (landing page)`;
-  hint.style.color = sub ? 'var(--muted)' : 'var(--ember)';
-}
-
-let currentLogs = { all: [], errors: [] };
-let currentTab = 'all';
-let deleteTarget = null;
-let editTarget = null;
-let lastServices = {};
-let lastResources = {};
-let sortMode = localStorage.getItem('proxdeploy-sort') || 'alpha';
-let viewMode = localStorage.getItem('proxdeploy-view') || 'sites';
-let collapsed = new Set(JSON.parse(localStorage.getItem('proxdeploy-collapsed') || '[]'));
-
-document.getElementById('sort-select').value = sortMode;
-
-function setView(mode) {
-  viewMode = mode;
-  localStorage.setItem('proxdeploy-view', mode);
-  document.getElementById('tab-sites').classList.toggle('active', mode === 'sites');
-  document.getElementById('tab-redirects').classList.toggle('active', mode === 'redirects');
-  renderServices();
-}
-setView(viewMode);
-
-// ── Poll service status every 4s ──────────────────────────────────────────────
-async function pollStatus() {
-  try {
-    const r = await fetch('api/status');
-    lastServices = await r.json();
-    renderServices();
-    if (editTarget && document.getElementById('edit-modal').style.display === 'flex') renderManageLists();
-  } catch(e) {}
-}
-
-async function pollResources() {
-  try {
-    const r = await fetch('api/resources');
-    lastResources = await r.json();
-    renderServices();
-  } catch(e) {}
-}
-
-setInterval(pollStatus, 4000);
-setInterval(pollResources, 10000);
-pollStatus();
-pollResources();
-
-// ── Sorting / grouping ────────────────────────────────────────────────────────
-function setSort(mode) {
-  sortMode = mode;
-  localStorage.setItem('proxdeploy-sort', mode);
-  renderServices();
-}
-
-function sortKeys(keys, services) {
-  const byDate = n => services[n].deployed_at || services[n].updated_at || '';
-  if (sortMode === 'oldest') return keys.sort((a,b) => (byDate(a) || '9999').localeCompare(byDate(b) || '9999'));
-  if (sortMode === 'newest') return keys.sort((a,b) => (byDate(b) || '').localeCompare(byDate(a) || ''));
-  if (sortMode === 'cpu' || sortMode === 'ram') {
-    // Highest utilization first; sites with no data sink to the bottom
-    const val = n => {
-      const r = lastResources[n] || {};
-      return sortMode === 'cpu' ? (r.cpu ?? -1) : (r.ram_mb ?? -1);
-    };
-    return keys.sort((a,b) => val(b) - val(a) || a.localeCompare(b));
-  }
-  return keys.sort();
-}
-
-function toggleGroup(project) {
-  if (collapsed.has(project)) collapsed.delete(project); else collapsed.add(project);
-  localStorage.setItem('proxdeploy-collapsed', JSON.stringify([...collapsed]));
-  renderServices();
-}
-
-function fmtUptime(s) {
-  if (s == null) return null;
-  const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
-// ── Render ────────────────────────────────────────────────────────────────────
-function renderServices() {
-  const services = lastServices;
-  const wrap = document.getElementById('services-groups');
-  const count = document.getElementById('svc-count');
-  const allKeys = Object.keys(services);
-
-  // Split into the two views
-  const siteKeys  = allKeys.filter(n => !services[n].redirect_to);
-  const redirKeys = allKeys.filter(n => services[n].redirect_to);
-  document.getElementById('count-sites').textContent = siteKeys.length || '';
-  document.getElementById('count-redirects').textContent = redirKeys.length || '';
-
-  const keys = viewMode === 'redirects' ? redirKeys : siteKeys;
-  const noun = viewMode === 'redirects' ? 'redirects' : 'sites';
-
-  const online = keys.filter(n => services[n].status === 'online').length;
-  const paused = keys.filter(n => services[n].status === 'paused').length;
-  count.textContent = `${keys.length} ${noun} · ${online} online` + (paused ? ` · ${paused} paused` : '');
-
-  if (keys.length === 0) {
-    wrap.innerHTML = viewMode === 'redirects'
-      ? `<div class="empty-state" id="empty-state">
-          <span class="icon">↪️</span>
-          <h3>No redirects yet</h3>
-          <p>Use the "Or add a redirect" row above to point a subdomain anywhere.</p>
-        </div>`
-      : `<div class="empty-state" id="empty-state">
-          <span class="icon">🚀</span>
-          <h3>No services deployed yet</h3>
-          <p>Deploy your first repo above to get started.</p>
-        </div>`;
-    return;
-  }
-
-  // Group by project
-  const groups = {};
-  for (const name of keys) {
-    const p = (services[name].project || '').trim() || 'Ungrouped';
-    (groups[p] = groups[p] || []).push(name);
-  }
-  const projectNames = Object.keys(groups).sort((a,b) => {
-    if (a === 'Ungrouped') return 1;
-    if (b === 'Ungrouped') return -1;
-    return a.localeCompare(b);
-  });
-
-  // Keep project datalist fresh for the deploy form + edit modal
-  document.getElementById('project-list').innerHTML =
-    projectNames.filter(p => p !== 'Ungrouped').map(p => `<option value="${escHtml(p)}">`).join('');
-
-  wrap.innerHTML = projectNames.map(project => {
-    const isCollapsed = collapsed.has(project);
-    const cards = sortKeys(groups[project], services).map(name => serviceCard(name, services[name])).join('');
-    return `<div class="project-group ${isCollapsed ? 'collapsed' : ''}">
-      <div class="project-header" onclick="toggleGroup('${escAttr(project)}')">
-        <span class="project-caret">▼</span>
-        <span class="project-name">${escHtml(project)}</span>
-        <span class="project-count">${groups[project].length} site${groups[project].length === 1 ? '' : 's'}</span>
-      </div>
-      <div class="services-grid">${cards}</div>
-    </div>`;
-  }).join('');
-}
-
-function serviceCard(name, svc) {
-  const url = `https://${fqdnOf(name)}`;
-  const statusLabel = {
-    online: 'Online', deploying: 'Deploying…', updating: 'Updating…',
-    error: 'Error', paused: 'Paused'
-  }[svc.status] || svc.status;
-  const date = svc.updated_at || svc.deployed_at;
-  const dateStr = date ? new Date(date).toLocaleString() : '—';
-  const isPaused = svc.status === 'paused';
-
-  const res = lastResources[name] || {};
-  const bits = [];
-  if (res.cpu != null)     bits.push(`CPU <b>${res.cpu.toFixed(1)}%</b>`);
-  if (res.ram_mb != null)  bits.push(`RAM <b>${res.ram_mb} MB</b>`);
-  if (res.disk_mb != null) bits.push(`Disk <b>${res.disk_mb} MB</b>`);
-  const up = fmtUptime(res.uptime_s);
-  if (up)                  bits.push(`Up <b>${up}</b>`);
-  if (svc.service_name && res.unit_active === false && !isPaused)
-    bits.push(`<b style="color:var(--red)">app stopped</b>`);
-  const resRow = bits.length ? `<div class="service-res">${bits.join('<span>·</span>')}</div>` : '';
-
-  const extPaths = Object.keys(svc.extensions || {});
-  const extChips = extPaths.length
-    ? `<div class="ext-chips">${extPaths.sort().map(p => `<span class="ext-chip">/${p}</span>`).join('')}</div>`
-    : '';
-
-  // Redirect "sites" get a slimmed-down card
-  if (svc.redirect_to) {
-    return `<div class="service-card ${isPaused ? 'paused' : ''}">
-      <div class="service-top">
-        <div>
-          <div class="service-name">${name} <span style="color:var(--muted); font-weight:400; font-size:11px;">redirect</span></div>
-          <a href="${url}" target="_blank" class="service-url">${url}</a>
+    <div class="sheet-body">
+      <div class="fset">
+        <div class="field">
+          <label for="d-repo">GitHub repository</label>
+          <input class="input" id="d-repo" placeholder="https://github.com/you/my-site" autocomplete="off" spellcheck="false" required>
         </div>
-        <div class="status-dot status-${svc.status}">${statusLabel}</div>
+        <div class="field">
+          <label for="d-sub">Address</label>
+          <div class="joined">
+            <input class="input" id="d-sub" placeholder="my-site" autocomplete="off" spellcheck="false" aria-describedby="d-preview">
+            <select class="input" id="d-domain" aria-label="Domain">
+              {% for d in domains %}<option value="{{ d }}">.{{ d }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="preview" id="d-preview" aria-live="polite"></div>
+        </div>
       </div>
-      <div class="service-meta">
-        → ${escHtml(svc.redirect_to)}${svc.preserve_path ? ' <span style="color:var(--muted)">(keeps path)</span>' : ''}
+
+      <div class="fset">
+        <span class="label" id="d-kind-label">Type</span>
+        <div class="segmented wide" role="group" aria-labelledby="d-kind-label">
+          <button type="button" data-kind="static" aria-pressed="true">Static files</button>
+          <button type="button" data-kind="app" aria-pressed="false">App server</button>
+        </div>
+        <div class="fgrid" id="d-app" hidden>
+          <div class="field">
+            <label for="d-port">Port</label>
+            <input class="input" id="d-port" inputmode="numeric" placeholder="3000" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="d-unit">systemd service</label>
+            <input class="input" id="d-unit" placeholder="my-site" autocomplete="off" spellcheck="false">
+          </div>
+          <p class="help full">nginx proxies to this port. Name the service so Pause can stop the app and Update can restart it.</p>
+        </div>
       </div>
-      <div class="service-actions">
-        ${pauseBtn}
-        <button class="btn-sm" onclick="openEdit('${name}')">⚙ Manage</button>
-        <button class="btn-sm danger" onclick="askDelete('${name}')">✕ Remove</button>
+
+      <div class="fgrid">
+        {% if nodes|length > 1 %}
+        <div class="field">
+          <label for="d-node">Machine</label>
+          <select class="input" id="d-node">
+            {% for n in node_info %}<option value="{{ n.name }}">{{ n.label }}</option>{% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        <div class="field">
+          <label for="d-project">Project <span class="help" style="display:inline">(optional)</span></label>
+          <input class="input" id="d-project" list="projects" placeholder="Ungrouped" autocomplete="off">
+        </div>
       </div>
-    </div>`;
+      <div id="d-error" class="notice bad" hidden role="alert"></div>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn" type="button" data-close>Cancel</button>
+      <button class="btn primary" type="submit" id="d-submit" data-busy="Deploying">Deploy</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ── Add a redirect ─────────────────────────────────────────────────────── -->
+<dialog class="sheet" id="redirect-sheet" aria-labelledby="redirect-title">
+  <form method="dialog" id="redirect-form" novalidate>
+    <div class="sheet-head">
+      <div class="titles">
+        <h2 class="sheet-title" id="redirect-title">Add a redirect</h2>
+        <p class="sheet-sub">Point an address anywhere with a permanent (301) redirect.</p>
+      </div>
+      <button class="icon-btn" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="sheet-body">
+      <div class="field">
+        <label for="r-sub">From</label>
+        <div class="joined">
+          <input class="input" id="r-sub" placeholder="example" autocomplete="off" spellcheck="false">
+          <select class="input" id="r-domain" aria-label="Domain">
+            {% for d in domains %}<option value="{{ d }}">.{{ d }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="r-target">To</label>
+        <input class="input" id="r-target" placeholder="https://example.com/page" autocomplete="off" spellcheck="false">
+      </div>
+      <label class="check"><input type="checkbox" id="r-keep"> Keep the path <span class="help" style="display:inline">(/foo goes to target/foo)</span></label>
+      <div id="r-error" class="notice bad" hidden role="alert"></div>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn" type="button" data-close>Cancel</button>
+      <button class="btn primary" type="submit" data-busy="Adding">Add redirect</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ── Connect a domain ───────────────────────────────────────────────────── -->
+<dialog class="sheet" id="domain-sheet" aria-labelledby="domain-title">
+  <form method="dialog" id="domain-form" novalidate>
+    <div class="sheet-head">
+      <div class="titles">
+        <h2 class="sheet-title" id="domain-title">Connect a domain</h2>
+        <p class="sheet-sub">For a domain already added to Cloudflare. ProxDeploy finds its zone, routes it and its wildcard through the tunnel, and adds it to every domain picker.</p>
+      </div>
+      <button class="icon-btn" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="sheet-body">
+      <div class="field">
+        <label for="n-domain">Domain</label>
+        <input class="input" id="n-domain" placeholder="example.com" autocomplete="off" spellcheck="false">
+      </div>
+      <details class="more">
+        <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>Zone ID</summary>
+        <div class="fset">
+          <div class="field">
+            <label for="n-zone">Cloudflare zone ID</label>
+            <input class="input mono" id="n-zone" placeholder="Looked up automatically" autocomplete="off" spellcheck="false">
+            <p class="help">Only needed if the lookup can't find the zone. It's 32 hex characters, on the domain's Overview page in Cloudflare.</p>
+          </div>
+        </div>
+      </details>
+      <div id="n-report" class="fset" aria-live="polite"></div>
+    </div>
+    <div class="sheet-foot">
+      <button class="btn" type="button" data-close>Cancel</button>
+      <span class="spacer"></span>
+      <button class="btn" type="button" id="n-check" data-busy="Checking">Check</button>
+      <button class="btn primary" type="submit" id="n-connect" data-busy="Connecting">Connect</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ── Site sheet (manage one site) ───────────────────────────────────────── -->
+<dialog class="sheet wide" id="site-sheet" aria-labelledby="s-title">
+  <div class="sheet-head">
+    <div class="titles">
+      <h2 class="sheet-title" id="s-title"></h2>
+      <p class="sheet-sub" id="s-sub"></p>
+    </div>
+    <button class="icon-btn" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="sheet-body" id="s-body"></div>
+</dialog>
+
+<!-- ── Logs ───────────────────────────────────────────────────────────────── -->
+<dialog class="panel" id="log-panel" aria-labelledby="l-title">
+  <div class="panel-head">
+    <div class="titles">
+      <h2 class="sheet-title" id="l-title">Logs</h2>
+      <p class="sheet-sub" id="l-sub"></p>
+    </div>
+    <div class="segmented" role="group" aria-label="Log filter">
+      <button type="button" data-tab="all" aria-pressed="true">All</button>
+      <button type="button" data-tab="errors" aria-pressed="false">Errors<span class="count" id="l-nerr"></span></button>
+    </div>
+    <span class="live" id="l-live"><span class="dot s-online" style="background:var(--green-dot)"></span>Live</span>
+    <button class="icon-btn" type="button" id="l-copy" aria-label="Copy logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button>
+    <button class="icon-btn" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <pre class="logs" id="l-body" tabindex="0"></pre>
+</dialog>
+
+<datalist id="projects"></datalist>
+
+<script id="boot" type="application/json">{{ {
+  "domains": domains, "defaultDomain": domain, "fqdns": fqdns,
+  "nodes": node_info, "localNode": local_node
+}|tojson }}</script>
+<script src="{{ url_for('static', filename='ui.js') }}"></script>
+<script>
+"use strict";
+const { $, $$, esc, icon, api, toast, report, openMenu, openDialog, confirmDialog, busy,
+        fmtUptime, fmtAgo, fmtMB, meter, badge, statusLabel, repoShort, patch, renderLogLines } = UI;
+
+const BOOT = JSON.parse($("#boot").textContent);
+const NODE_INFO = Object.fromEntries(BOOT.nodes.map(n => [n.name, n]));
+const MULTI_NODE = BOOT.nodes.length > 1;
+const BUSY = new Set(["deploying", "updating"]);
+
+// ── Persisted view prefs (per browser; failures are harmless) ─────────────
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("pd." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("pd." + k, JSON.stringify(v)); } catch {} },
+};
+
+const state = {
+  services: null, resources: {}, nodes: null, sys: null,
+  view: store.get("view", "sites"), sort: store.get("sort", "alpha"),
+  filter: "all", q: "", collapsed: new Set(store.get("collapsed", [])),
+  site: null, log: { key: null, tab: "all", data: { all: [], errors: [] } },
+};
+
+// ── Naming helpers ────────────────────────────────────────────────────────
+// A site's key is its bare name on the default domain and its full hostname
+// everywhere else — never build a hostname by concatenation, ask here.
+const svcOf    = k => (state.services || {})[k] || {};
+const fqdnOf   = k => svcOf(k).fqdn || BOOT.fqdns[k] || `${k}.${BOOT.defaultDomain}`;
+const domainOf = k => svcOf(k).domain || BOOT.defaultDomain;
+const nodeOf   = k => svcOf(k).node || BOOT.localNode;
+const isRemote = k => nodeOf(k) !== BOOT.localNode;
+const labelOf  = k => { const s = svcOf(k); return s.subdomain !== undefined ? s.subdomain : k; };
+const nodeLabel = n => (NODE_INFO[n] || {}).label || n;
+const keyFor = (sub, dom) => sub ? (dom === BOOT.defaultDomain ? sub : `${sub}.${dom}`) : dom;
+const hostFor = (sub, dom) => sub ? `${sub}.${dom}` : dom;
+const SUB_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/;
+// Match on hostname, not key: apex sites aren't always keyed the way keyFor() guesses
+const hostTaken = (sub, dom) => Object.keys(state.services || {}).some(k => fqdnOf(k) === hostFor(sub, dom));
+const UNIT_RE = /^[A-Za-z0-9@_.\-]+$/;
+
+function needsAttention(k) {
+  const s = svcOf(k), r = state.resources[k] || {};
+  return s.status === "error" || (s.service_name && r.unit_active === false && s.status !== "paused");
+}
+
+// ── Polling ───────────────────────────────────────────────────────────────
+async function pollStatus() {
+  const d = await api("api/status");
+  if (d && d.ok !== false) {
+    delete d.ok;
+    state.services = d;
+    render();
+    if (state.site && $("#site-sheet").open) renderSite();
   }
+}
+async function pollResources() {
+  const d = await api("api/resources");
+  if (d && d.ok !== false) { delete d.ok; state.resources = d; render(); }
+}
+async function pollSys() {
+  const d = await api("api/sysinfo");
+  if (d && d.ok !== false) { state.sys = d; renderFleet(); }
+}
+async function pollNodes() {
+  if (!MULTI_NODE) return;
+  const d = await api("api/nodes");
+  if (d && d.nodes) { state.nodes = d.nodes; renderFleet(); }
+}
+function every(ms, fn) {
+  fn();
+  setInterval(() => { if (!document.hidden) fn(); }, ms);
+}
+// Poll faster while something is deploying so progress feels live
+let fastTimer = null;
+function tuneFastPoll() {
+  const anyBusy = Object.values(state.services || {}).some(s => BUSY.has(s.status));
+  if (anyBusy && !fastTimer) fastTimer = setInterval(pollStatus, 1500);
+  if (!anyBusy && fastTimer) { clearInterval(fastTimer); fastTimer = null; }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { pollStatus(); pollResources(); pollSys(); } });
 
-  const pauseBtn = isPaused
-    ? `<button class="btn-sm" onclick="resumeService('${name}')">▶ Resume</button>`
-    : `<button class="btn-sm" onclick="pauseService('${name}')">⏸ Pause</button>`;
-
-  return `<div class="service-card ${isPaused ? 'paused' : ''}">
-    <div class="service-top">
-      <div>
-        <div class="service-name">${name}</div>
-        <a href="${url}" target="_blank" class="service-url">${url}</a>
+// ── Fleet tiles ───────────────────────────────────────────────────────────
+function renderFleet() {
+  const tiles = [];
+  const counts = {};
+  for (const s of Object.values(state.services || {})) if (!s.redirect_to) counts[s.node || BOOT.localNode] = (counts[s.node || BOOT.localNode] || 0) + 1;
+  for (const n of BOOT.nodes) {
+    let online = true, cpu = null, ramU = null, ramT = null, err = null;
+    if (n.local) {
+      if (state.sys) { cpu = state.sys.cpu_percent; ramU = state.sys.ram_used_mb; ramT = state.sys.ram_total_mb; }
+    } else {
+      const row = (state.nodes || []).find(x => x.name === n.name);
+      online = row ? row.online : null;
+      err = row && row.error;
+      if (row && row.sysinfo) { cpu = row.sysinfo.cpu_percent; ramU = row.sysinfo.ram_used_mb; ramT = row.sysinfo.ram_total_mb; }
+    }
+    const st = online === false ? "s-error" : online ? "s-online" : "";
+    const sites = counts[n.name] || 0;
+    const body = `
+      <div class="tile-head">
+        <span class="dot ${st}"></span>
+        <span class="tile-name">${esc(n.label)}</span>
+        <span class="tile-sub">${n.local ? "Controller" : "Node"} · ${sites} site${sites === 1 ? "" : "s"}</span>
       </div>
-      <div class="status-dot status-${svc.status}">${statusLabel}</div>
+      ${online === false
+        ? `<div class="notice bad" style="margin:0">${icon("alert")}<span>Unreachable${err ? " — " + esc(String(err).slice(0, 120)) : ""}</span></div>`
+        : `<div class="meters">
+            <div class="meter"><span class="k">CPU</span>${meter(cpu)}<span class="v">${cpu == null ? "—" : cpu.toFixed(0) + "%"}</span></div>
+            <div class="meter"><span class="k">RAM</span>${meter(ramT ? 100 * ramU / ramT : 0)}<span class="v">${ramT ? `${fmtMB(ramU)} of ${fmtMB(ramT)}` : "—"}</span></div>
+          </div>`}`;
+    tiles.push(n.dashboard && !n.local
+      ? `<a class="tile" href="${esc(n.dashboard)}" aria-label="${esc(n.label)} dashboard">${body}</a>`
+      : `<div class="tile">${body}</div>`);
+  }
+  patch($("#fleet"), tiles.join(""));
+}
+
+// ── Site list ─────────────────────────────────────────────────────────────
+function sortKeys(keys) {
+  const S = state.services, R = state.resources;
+  const when = k => S[k].updated_at || S[k].deployed_at || "";
+  const cmp = {
+    alpha:  (a, b) => fqdnOf(a).localeCompare(fqdnOf(b)),
+    newest: (a, b) => when(b).localeCompare(when(a)),
+    oldest: (a, b) => (S[a].deployed_at || "9").localeCompare(S[b].deployed_at || "9"),
+    cpu:    (a, b) => ((R[b] || {}).cpu ?? -1) - ((R[a] || {}).cpu ?? -1),
+    ram:    (a, b) => ((R[b] || {}).ram_mb ?? -1) - ((R[a] || {}).ram_mb ?? -1),
+    disk:   (a, b) => ((R[b] || {}).disk_mb ?? -1) - ((R[a] || {}).disk_mb ?? -1),
+  }[state.sort] || (() => 0);
+  return keys.sort((a, b) => cmp(a, b) || a.localeCompare(b));
+}
+
+function matches(k) {
+  const s = svcOf(k);
+  if (state.filter === "online" && s.status !== "online") return false;
+  if (state.filter === "paused" && s.status !== "paused") return false;
+  if (state.filter === "attention" && !needsAttention(k)) return false;
+  if (!state.q) return true;
+  const hay = [k, fqdnOf(k), s.repo_url, s.project, s.redirect_to, s.service_name, nodeLabel(nodeOf(k))].join(" ").toLowerCase();
+  return state.q.split(/\s+/).every(t => hay.includes(t));
+}
+
+function rowHTML(k) {
+  const s = svcOf(k), r = state.resources[k] || {};
+  const url = `https://${fqdnOf(k)}`;
+  const paused = s.status === "paused";
+  const node = isRemote(k) ? `<span class="chip">${esc(nodeLabel(nodeOf(k)))}</span>` : "";
+  let meta;
+  if (s.redirect_to) {
+    meta = `<span class="repo">→ ${esc(s.redirect_to)}${s.preserve_path ? " <span style='color:var(--label-3)'>· keeps path</span>" : ""}</span>`;
+  } else {
+    const bits = [];
+    if (r.cpu != null) bits.push(`<span>CPU <b>${r.cpu.toFixed(1)}%</b></span>`);
+    if (r.ram_mb != null) bits.push(`<span>RAM <b>${fmtMB(r.ram_mb)}</b></span>`);
+    if (r.disk_mb != null) bits.push(`<span>Disk <b>${fmtMB(r.disk_mb)}</b></span>`);
+    const up = fmtUptime(r.uptime_s); if (up) bits.push(`<span>Up <b>${up}</b></span>`);
+    if (s.service_name && r.unit_active === false && !paused) bits.unshift(`<span class="warn">App stopped</span>`);
+    const exts = Object.keys(s.extensions || {});
+    if (exts.length) bits.push(`<span>${exts.map(p => "/" + esc(p)).join(" ")}</span>`);
+    meta = `<span class="repo">${esc(repoShort(s.repo_url)) || "—"}</span>${bits.length ? `<span class="res">${bits.join("")}</span>` : ""}`;
+  }
+  return `<div class="row ${paused ? "paused" : ""} s-${esc(s.status)}" data-key="${esc(k)}">
+    <div class="row-main">
+      <span class="dot" title="${esc(statusLabel(s.status))}"></span>
+      <div class="row-text">
+        <button class="row-name" data-act="open" data-fid="open:${esc(k)}"><span>${esc(labelOf(k) || fqdnOf(k))}</span>${node}</button>
+        <a class="row-url" href="${esc(url)}" target="_blank" rel="noopener" title="${esc(fqdnOf(k))}">${esc(fqdnOf(k))}</a>
+      </div>
     </div>
-    <div class="service-meta">
-      ${escHtml(svc.repo_url)}<br>
-      Last updated: ${dateStr}
-    </div>
-    ${extChips}
-    ${resRow}
-    <div class="service-actions">
-      ${pauseBtn}
-      <button class="btn-sm" onclick="updateService('${name}')">↑ Update</button>
-      <button class="btn-sm restart-btn" onclick="restartService('${name}')">↺ Restart</button>
-      <button class="btn-sm log-btn" onclick="openLogs('${name}')">Logs</button>
-      <button class="btn-sm" onclick="openEdit('${name}')">⚙ Manage</button>
-      <button class="btn-sm danger" onclick="askDelete('${name}')">✕ Remove</button>
+    <div class="row-meta">${meta}</div>
+    <div class="row-actions">
+      ${badge(s.status)}
+      ${s.redirect_to ? "" : `<button class="icon-btn" data-act="logs" data-fid="logs:${esc(k)}" aria-label="Logs for ${esc(fqdnOf(k))}" title="Logs">${icon("logs")}</button>`}
+      <button class="icon-btn" data-act="menu" data-fid="menu:${esc(k)}" aria-haspopup="menu" aria-expanded="false" aria-label="Actions for ${esc(fqdnOf(k))}">${icon("more")}</button>
     </div>
   </div>`;
 }
 
-// ── Deploy ────────────────────────────────────────────────────────────────────
-async function deployService() {
-  const repoUrl  = document.getElementById('repo-url').value.trim();
-  const subdomain = document.getElementById('subdomain').value.trim();
-  const domain   = document.getElementById('deploy-domain').value;
-  const port     = document.getElementById('port').value.trim();
-  const project  = document.getElementById('project').value.trim();
-  const btn      = document.getElementById('deploy-btn');
+function render() {
+  const S = state.services;
+  if (!S) return;
+  tuneFastPoll();
+  const all = Object.keys(S);
+  const sites = all.filter(k => !S[k].redirect_to), redirs = all.filter(k => S[k].redirect_to);
+  $("#n-sites").textContent = sites.length || "";
+  $("#n-redirects").textContent = redirs.length || "";
 
-  if (!repoUrl) { toast('Fill in the repo URL.', 'err'); return; }
+  const online = sites.filter(k => S[k].status === "online").length;
+  const paused = sites.filter(k => S[k].status === "paused").length;
+  const attn = all.filter(needsAttention).length;
+  const parts = [`${sites.length} site${sites.length === 1 ? "" : "s"}`, `${online} online`];
+  if (paused) parts.push(`${paused} paused`);
+  if (attn) parts.push(`${attn} need${attn === 1 ? "s" : ""} attention`);
+  if (redirs.length) parts.push(`${redirs.length} redirect${redirs.length === 1 ? "" : "s"}`);
+  $("#summary").textContent = parts.join(" · ");
+  $("#page-title").textContent = state.view === "redirects" ? "Redirects" : "Sites";
 
-  // An empty subdomain means the apex — worth confirming, since it replaces
-  // whatever the domain's landing page currently is.
-  if (!subdomain && !confirm(`Deploy this repo as the landing page at ${domain}?`)) return;
+  const pool = (state.view === "redirects" ? redirs : sites).filter(matches);
 
-  btn.disabled = true;
-  btn.textContent = 'Deploying…';
+  // Project datalist for the deploy + manage forms
+  const projects = [...new Set(all.map(k => (S[k].project || "").trim()).filter(Boolean))].sort();
+  patch($("#projects"), projects.map(p => `<option value="${esc(p)}">`).join(""));
 
-  const r = await fetch('api/deploy', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ repo_url: repoUrl, subdomain, domain, port: port || null, project })
-  });
-  const data = await r.json();
-
-  btn.disabled = false;
-  btn.textContent = 'Deploy →';
-
-  if (data.ok) {
-    toast(data.message, 'ok');
-    document.getElementById('repo-url').value = '';
-    document.getElementById('subdomain').value = '';
-    document.getElementById('port').value = '';
-    document.getElementById('project').value = '';
-    pollStatus();
-  } else {
-    toast(data.error, 'err');
-  }
-}
-
-// ── Update ────────────────────────────────────────────────────────────────────
-async function updateService(name) {
-  const r = await fetch('api/update', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdomain: name })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-  if (data.ok) pollStatus();
-}
-
-// ── Delete ────────────────────────────────────────────────────────────────────
-function askDelete(name) {
-  deleteTarget = name;
-  document.getElementById('confirm-text').textContent =
-    `This will remove "${fqdnOf(name)}", delete its files, remove the Nginx config, and delete the Cloudflare DNS record. This cannot be undone.`;
-  document.getElementById('confirm-modal').style.display = 'flex';
-}
-
-function closeConfirm() {
-  deleteTarget = null;
-  document.getElementById('confirm-modal').style.display = 'none';
-}
-
-async function confirmDelete() {
-  if (!deleteTarget) return;
-  const name = deleteTarget;
-  closeConfirm();
-  const r = await fetch('api/delete', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdomain: name })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-  if (data.ok) pollStatus();
-}
-
-// ── Logs ──────────────────────────────────────────────────────────────────────
-async function openLogs(name) {
-  document.getElementById('log-svc').textContent = name;
-  document.getElementById('log-drawer').style.display = 'block';
-  await refreshLogs(name);
-}
-
-async function refreshLogs(name) {
-  const r = await fetch(`api/logs/${name}`);
-  currentLogs = await r.json();
-  renderLogLines();
-}
-
-function renderLogLines() {
-  const body = document.getElementById('log-body');
-  const lines = currentLogs[currentTab];
-  if (!lines || lines.length === 0) {
-    body.innerHTML = `<div class="log-line empty">No ${currentTab === 'errors' ? 'errors or warnings' : 'output'} yet.</div>`;
+  if (!pool.length) {
+    const filtered = state.q || state.filter !== "all";
+    patch($("#groups"), `<div class="empty">${icon(filtered ? "search" : state.view === "redirects" ? "redirect" : "rocket")}
+      <h3>${filtered ? "No matches" : state.view === "redirects" ? "No redirects yet" : "No sites yet"}</h3>
+      <p>${filtered ? "Try a different search or filter."
+        : state.view === "redirects" ? "Choose New → Add a redirect to point an address anywhere."
+        : "Choose New → Deploy a site to put your first repo online."}</p></div>`);
     return;
   }
-  body.innerHTML = lines.map(l => {
-    const cls = l.includes('[ERROR]') ? 'err' : l.includes('[WARN]') ? 'warn' : '';
-    return `<div class="log-line ${cls}">${escHtml(l.trimEnd())}</div>`;
-  }).join('');
-  body.scrollTop = body.scrollHeight;
+
+  const groups = {};
+  for (const k of pool) (groups[(S[k].project || "").trim() || "Ungrouped"] ||= []).push(k);
+  const names = Object.keys(groups).sort((a, b) => a === "Ungrouped" ? 1 : b === "Ungrouped" ? -1 : a.localeCompare(b));
+  // Grouping only helps when there's more than one group
+  const single = names.length === 1;
+  const html = names.map(g => {
+    const collapsed = !single && !state.q && state.collapsed.has(g);
+    return `<section class="group ${collapsed ? "collapsed" : ""}">
+      ${single ? "" : `<button class="group-head" data-group="${esc(g)}" data-fid="group:${esc(g)}" aria-expanded="${!collapsed}">
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        ${esc(g)} <span class="n">${groups[g].length}</span></button>`}
+      <div class="list">${sortKeys(groups[g]).map(rowHTML).join("")}</div>
+    </section>`;
+  }).join("");
+  patch($("#groups"), html);
 }
 
-function switchTab(tab) {
-  currentTab = tab;
-  document.querySelectorAll('.log-tab').forEach((el, i) => {
-    el.classList.toggle('active', (i === 0 && tab === 'all') || (i === 1 && tab === 'errors'));
-  });
-  renderLogLines();
+// ── Row interactions (delegated, so re-renders never lose handlers) ───────
+$("#groups").addEventListener("click", e => {
+  const g = e.target.closest("[data-group]");
+  if (g) {
+    const name = g.dataset.group;
+    state.collapsed.has(name) ? state.collapsed.delete(name) : state.collapsed.add(name);
+    store.set("collapsed", [...state.collapsed]);
+    return render();
+  }
+  const row = e.target.closest(".row");
+  if (!row || e.target.closest("a")) return;
+  const k = row.dataset.key;
+  const act = e.target.closest("[data-act]")?.dataset.act || "open";
+  if (act === "logs") openLogs(k);
+  else if (act === "menu") openMenu(e.target.closest("[data-act]"), siteMenu(k));
+  else openSite(k);
+});
+
+function siteMenu(k) {
+  const s = svcOf(k), paused = s.status === "paused", busyNow = BUSY.has(s.status);
+  const items = [];
+  if (!s.redirect_to) {
+    items.push({ label: "Update from GitHub", icon: "update", disabled: busyNow, run: () => doUpdate(k) });
+    items.push({ label: "Restart", icon: "restart", disabled: busyNow || paused, run: () => doRestart(k) });
+  }
+  items.push(paused
+    ? { label: "Resume", icon: "play", disabled: busyNow, run: () => doPause(k, false) }
+    : { label: "Pause", icon: "pause", disabled: busyNow, run: () => doPause(k, true) });
+  items.push("-");
+  items.push({ label: "Open site", icon: "external", run: () => window.open(`https://${fqdnOf(k)}`, "_blank", "noopener") });
+  if (!s.redirect_to) items.push({ label: "Logs", icon: "logs", run: () => openLogs(k) });
+  items.push({ label: "Settings…", icon: "gear", run: () => openSite(k) });
+  items.push("-");
+  items.push({ label: "Remove…", icon: "trash", danger: true, run: () => doDelete(k) });
+  return items;
 }
 
-function closeLogs() {
-  document.getElementById('log-drawer').style.display = 'none';
+// ── Actions ───────────────────────────────────────────────────────────────
+async function doUpdate(k) {
+  const res = await api("api/update", { subdomain: k });
+  report(res);
+  if (res.ok) pollStatus();
 }
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+async function doRestart(k) {
+  toast(`Restarting ${fqdnOf(k)}…`);
+  report(await api("api/restart", { subdomain: k }));
+  pollResources();
 }
-
-function escAttr(s) {
-  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
-}
-
-// ── Pause / Resume ────────────────────────────────────────────────────────────
-async function pauseService(name) {
-  toast(`Pausing ${name}…`, 'inf');
-  const r = await fetch('api/pause', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdomain: name })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+async function doPause(k, pause) {
+  const s = svcOf(k);
+  if (pause && !s.redirect_to && s.port && !s.service_name) {
+    const go = await confirmDialog({
+      title: `Pause ${fqdnOf(k)}?`,
+      body: "This app has no systemd service set, so pausing only shows visitors the paused page. The process keeps running and using memory. Set its service in Settings to stop it too.",
+      confirm: "Pause anyway",
+    });
+    if (!go) return;
+  }
+  toast(`${pause ? "Pausing" : "Resuming"} ${fqdnOf(k)}…`);
+  report(await api(pause ? "api/pause" : "api/resume", { subdomain: k }));
   pollStatus(); pollResources();
 }
-
-async function resumeService(name) {
-  toast(`Resuming ${name}…`, 'inf');
-  const r = await fetch('api/resume', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdomain: name })
+async function doDelete(k) {
+  const s = svcOf(k);
+  const ok = await confirmDialog({
+    title: `Remove ${fqdnOf(k)}?`,
+    body: s.redirect_to
+      ? "The redirect, its nginx config and its DNS record will be removed."
+      : `Its files, nginx config${Object.keys(s.extensions || {}).length ? ", path extensions" : ""} and Cloudflare DNS record will be deleted${isRemote(k) ? ` from ${esc(nodeLabel(nodeOf(k)))}` : ""}. This can't be undone.`,
+    confirm: "Remove", destructive: true,
   });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-  pollStatus(); pollResources();
-}
-
-// ── Manage (project / systemd service / extensions / subdomains) ─────────────
-function openEdit(name) {
-  editTarget = name;
-  const svc = lastServices[name] || {};
-  document.getElementById('edit-name').textContent = fqdnOf(name);
-  // Default the move-domain picker to where the site already lives, so
-  // "→ standalone" is a pure rename unless you deliberately change it.
-  document.getElementById('conv-domain').value = domainOf(name);
-  document.getElementById('edit-project').value = svc.project || '';
-  document.getElementById('edit-service').value = svc.service_name || '';
-  document.getElementById('ext-example').textContent = `${fqdnOf(name)}/blog`;
-  document.getElementById('sub-example').textContent = `api.${fqdnOf(name)}`;
-  ['ext-path','ext-repo','ext-port','sub-name','sub-repo','sub-port'].forEach(id =>
-    document.getElementById(id).value = '');
-
-  // Convert section: parent picker (all other sites) + name prefilled
-  const others = Object.keys(lastServices).filter(n => n !== name).sort();
-  document.getElementById('conv-parent').innerHTML =
-    others.map(n => `<option value="${n}">under ${n}</option>`).join('');
-  document.getElementById('conv-name').value = name.split('.')[0];
-  updateConvExamples();
-
-  // Redirect sites: show the redirect editor, hide the repo-only sections
-  const isRedirect = !!svc.redirect_to;
-  document.getElementById('sec-redir').style.display = isRedirect ? '' : 'none';
-  document.getElementById('sec-ext').style.display   = isRedirect ? 'none' : '';
-  document.getElementById('sec-sub').style.display   = isRedirect ? 'none' : '';
-  document.getElementById('sec-conv').style.display  = isRedirect ? 'none' : '';
-  if (isRedirect) {
-    document.getElementById('redir-example').textContent = `${fqdnOf(name)}`;
-    document.getElementById('edit-redir-target').value = svc.redirect_to || '';
-    document.getElementById('edit-redir-preserve').checked = !!svc.preserve_path;
-  }
-
-  renderManageLists();
-  document.getElementById('edit-modal').style.display = 'flex';
-}
-
-// ── Redirects ────────────────────────────────────────────────────────────────
-async function addRedirect() {
-  const sub    = document.getElementById('redir-sub').value.trim().toLowerCase();
-  const domain = document.getElementById('redir-domain').value;
-  const target = document.getElementById('redir-target').value.trim();
-  const preserve = document.getElementById('redir-preserve').checked;
-  if (!sub || !target) { toast('Fill in the subdomain and target URL.', 'err'); return; }
-  const r = await fetch('api/redirect/add', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdomain: sub, domain, target, preserve_path: preserve })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-  if (data.ok) {
-    document.getElementById('redir-sub').value = '';
-    document.getElementById('redir-target').value = '';
-    document.getElementById('redir-preserve').checked = false;
-    await pollStatus();
-    setView('redirects');   // jump to the redirects tab so the new one is visible
-  }
-}
-
-async function saveRedirect() {
-  if (!editTarget) return;
-  const r = await fetch('api/redirect/edit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      subdomain: editTarget,
-      target: document.getElementById('edit-redir-target').value.trim(),
-      preserve_path: document.getElementById('edit-redir-preserve').checked
-    })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-  if (data.ok) pollStatus();
-}
-
-/* The label part of a site's hostname (everything before its domain).
-   Empty string for a landing page. Needed to nest one site under another
-   when the parent may itself be on a non-default domain. */
-function subLabelOf(name) {
-  const svc = (lastServices || {})[name];
-  if (svc && svc.subdomain !== undefined) return svc.subdomain;
-  return name;  // legacy record: the key is the label
-}
-
-function convSoloTarget(nm) {
-  const dom = document.getElementById('conv-domain').value;
-  return nm ? `${nm}.${dom}` : `${dom} (landing page)`;
-}
-
-function updateConvExamples() {
-  const parent = document.getElementById('conv-parent').value || 'othersite';
-  const nm = document.getElementById('conv-name').value.trim() || 'name';
-  const parentLabel = subLabelOf(parent);
-  document.getElementById('conv-example-ext').textContent = `${fqdnOf(parent)}/${nm}/`;
-  document.getElementById('conv-example-sub').textContent = `${nm}.${fqdnOf(parent)}`;
-  document.getElementById('conv-example-solo').textContent = convSoloTarget(nm);
-}
-
-async function convertSite(mode) {
-  if (!editTarget) return;
-  const parent = document.getElementById('conv-parent').value;
-  const nm = document.getElementById('conv-name').value.trim().toLowerCase();
-  const convDomain = document.getElementById('conv-domain').value;
-  if (!parent && mode !== 'standalone') { toast('No other site to attach to.', 'err'); return; }
-  // Standalone with a blank name is the "make this the landing page" case
-  if (!nm && mode !== 'standalone') { toast('Give it a name.', 'err'); return; }
-
-  const target = mode === 'extension' ? `${fqdnOf(parent)}/${nm}/`
-             : mode === 'subdomain'  ? `${nm}.${fqdnOf(parent)}`
-             : convSoloTarget(nm);
-  if (!confirm(`Turn ${fqdnOf(editTarget)} into ${target}?\n\nFiles are NOT re-uploaded — they stay in place. The old address stops working and its DNS record is removed.`)) return;
-
-  // Relative URLs only — the dashboard may be mounted under a path prefix.
-  const url  = mode === 'extension' ? 'api/convert/extension' : 'api/convert/subdomain';
-  // Nesting under a parent must follow the PARENT's domain, not this site's.
-  const body = mode === 'extension'
-    ? { subdomain: editTarget, parent, path: nm }
-    : mode === 'subdomain'
-      ? { subdomain: editTarget,
-          new_subdomain: `${nm}.${subLabelOf(parent)}`,
-          domain: domainOf(parent) }
-      : { subdomain: editTarget, new_subdomain: nm, domain: convDomain };
-
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-  if (data.ok) { closeEdit(); pollStatus(); pollResources(); }
-}
-
-function renderManageLists() {
-  if (!editTarget) return;
-  const svc = lastServices[editTarget] || {};
-
-  // Extensions
-  const exts = svc.extensions || {};
-  const extList = document.getElementById('ext-list');
-  extList.innerHTML = Object.keys(exts).sort().map(p => {
-    const e = exts[p];
-    const info = e.port ? `→ port ${e.port}` : `${e.repo_url || ''}`;
-    const status = e.status && e.status !== 'online' ? ` (${e.status})` : '';
-    const upd = e.repo_url ? `<button onclick="updateExtension('${p}')" title="Pull latest">↑</button>` : '';
-    return `<div class="ext-row">
-      <span class="ext-path">/${p}</span>
-      <span class="ext-info">${escHtml(info)}${status}</span>
-      ${upd}
-      <button onclick="detachExtension('${p}')" title="Revert: make this its own site again">↗</button>
-      <button class="danger" onclick="removeExtension('${p}')" title="Delete files">✕</button>
-    </div>`;
-  }).join('') || '<p class="hint" style="margin-bottom:10px">No extensions yet.</p>';
-
-  // Nested subdomains (sites named *.editTarget)
-  const children = Object.keys(lastServices).filter(n => n.endsWith('.' + editTarget)).sort();
-  document.getElementById('sub-list').innerHTML = children.map(n =>
-    `<div class="ext-row">
-      <span class="ext-path">${fqdnOf(n)}</span>
-      <span class="ext-info">${lastServices[n].status}</span>
-      <button class="danger" onclick="closeEdit(); askDelete('${n}')">✕</button>
-    </div>`
-  ).join('') || '<p class="hint" style="margin-bottom:10px">No nested subdomains yet.</p>';
-}
-
-async function addExtension() {
-  if (!editTarget) return;
-  const path = document.getElementById('ext-path').value.trim().replace(/^\/+/,'');
-  const repo = document.getElementById('ext-repo').value.trim();
-  const port = document.getElementById('ext-port').value.trim();
-  if (!path) { toast('Give the extension a path, like blog.', 'err'); return; }
-  const r = await fetch('api/ext/add', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdomain: editTarget, path, repo_url: repo, port: port || null })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-  if (data.ok) {
-    ['ext-path','ext-repo','ext-port'].forEach(id => document.getElementById(id).value = '');
-    await pollStatus();
-    renderManageLists();
-  }
-}
-
-async function updateExtension(path) {
-  const r = await fetch('api/ext/update', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdomain: editTarget, path })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-}
-
-async function detachExtension(path) {
-  if (!editTarget) return;
-  const name = (prompt(`Make /${path} its own site again.\n\nWhat subdomain should it get? (files are not re-uploaded)`, path) || '').trim().toLowerCase();
-  if (!name) return;
-  const r = await fetch('api/convert/detach', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdomain: editTarget, path, new_subdomain: name })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-  if (data.ok) { await pollStatus(); renderManageLists(); }
-}
-
-async function removeExtension(path) {
-  if (!confirm(`Remove /${path} from ${fqdnOf(editTarget)}? Its files will be deleted.`)) return;
-  const r = await fetch('api/ext/remove', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdomain: editTarget, path })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-  await pollStatus();
-  renderManageLists();
-}
-
-async function addSubdomain() {
-  if (!editTarget) return;
-  const label = document.getElementById('sub-name').value.trim().replace(/\.+$/,'');
-  const repo  = document.getElementById('sub-repo').value.trim();
-  const port  = document.getElementById('sub-port').value.trim();
-  if (!label || !repo) { toast('Give a subdomain name and repo URL.', 'err'); return; }
-  const parent = lastServices[editTarget] || {};
-  const r = await fetch('api/deploy', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      repo_url: repo,
-      subdomain: `${label}.${editTarget}`,
-      port: port || null,
-      project: parent.project || ''
-    })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
-  if (data.ok) {
-    ['sub-name','sub-repo','sub-port'].forEach(id => document.getElementById(id).value = '');
-    await pollStatus();
-    renderManageLists();
-  }
-}
-
-function closeEdit() {
-  editTarget = null;
-  document.getElementById('edit-modal').style.display = 'none';
-}
-
-async function saveEdit() {
-  if (!editTarget) return;
-  const body = {
-    subdomain: editTarget,
-    project: document.getElementById('edit-project').value.trim(),
-    service_name: document.getElementById('edit-service').value.trim()
-  };
-  closeEdit();
-  const r = await fetch('api/edit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+  if (!ok) return;
+  if ($("#site-sheet").open) $("#site-sheet").close();
+  report(await api("api/delete", { subdomain: k }));
   pollStatus();
 }
 
-// ── Restart ───────────────────────────────────────────────────────────────────
-async function restartService(name) {
-  toast(`Restarting ${name}…`, 'inf');
-  const r = await fetch('api/restart', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdomain: name })
-  });
-  const data = await r.json();
-  toast(data.ok ? data.message : data.error, data.ok ? 'ok' : 'err');
+// ── New menu / account menu ───────────────────────────────────────────────
+$("#new-btn").addEventListener("click", e => openMenu(e.currentTarget, [
+  { label: "Deploy a site", icon: "rocket", run: openDeploy },
+  { label: "Add a redirect", icon: "redirect", run: openRedirect },
+  "-",
+  { label: "Connect a domain", icon: "globe", run: openDomain },
+]));
+$("#account-btn").addEventListener("click", e => openMenu(e.currentTarget, [
+  ...BOOT.nodes.filter(n => n.dashboard && !n.local).map(n => ({ label: `${n.label} dashboard`, icon: "server", run: () => location.href = n.dashboard })),
+  { label: "Connect a domain", icon: "globe", run: openDomain },
+  "-",
+  { label: "Sign out", icon: "signout", run: () => location.href = "logout" },
+]));
+
+// Close buttons + form reset on close for every dialog
+$$("dialog").forEach(d => {
+  d.addEventListener("click", e => { if (e.target.closest("[data-close]")) d.close(); });
+  // Editing a flagged field clears its error state — validate again on submit
+  d.addEventListener("input", e => { if (e.target.getAttribute("aria-invalid") === "true") e.target.removeAttribute("aria-invalid"); });
+});
+
+// ── Deploy sheet ──────────────────────────────────────────────────────────
+let deployKind = "static";
+function setKind(kind) {
+  deployKind = kind;
+  $$("#deploy-sheet [data-kind]").forEach(b => b.setAttribute("aria-pressed", b.dataset.kind === kind));
+  $("#d-app").hidden = kind !== "app";
+}
+$$("#deploy-sheet [data-kind]").forEach(b => b.addEventListener("click", () => setKind(b.dataset.kind)));
+
+function deployPreview() {
+  const sub = $("#d-sub").value.trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+  const dom = $("#d-domain").value;
+  const bad = sub && !SUB_RE.test(sub);
+  $("#d-sub").setAttribute("aria-invalid", bad);
+  // Only flag a clash once there's a name — an empty box is just the default state
+  const taken = !bad && sub && hostTaken(sub, dom);
+  $("#d-preview").innerHTML = bad
+    ? `${icon("alert")}<span>Use lowercase letters, numbers, hyphens and dots.</span>`
+    : taken
+      ? `${icon("alert")}<span>${esc(hostFor(sub, dom))} is already deployed — update it instead.</span>`
+      : sub ? `${icon("globe")}<span>https://${esc(hostFor(sub, dom))}</span>`
+            : `${icon("info")}<span>Leave empty to deploy ${esc(dom)} itself — the domain's landing page.</span>`;
+  $("#d-preview").className = "preview" + (bad || taken ? " bad" : sub ? "" : " muted");
+}
+["input", "change"].forEach(ev => { $("#d-sub").addEventListener(ev, deployPreview); $("#d-domain").addEventListener(ev, deployPreview); });
+$("#d-unit").addEventListener("input", () => { $("#d-unit").dataset.touched = "1"; });
+$("#d-sub").addEventListener("input", () => {
+  // Suggest the unit name from the subdomain until the user types their own
+  if (!$("#d-unit").dataset.touched) $("#d-unit").value = $("#d-sub").value.trim().split(".")[0];
+});
+
+function openDeploy(prefill = {}) {
+  $("#deploy-form").reset();
+  delete $("#d-unit").dataset.touched;
+  $("#d-error").hidden = true;
+  $$("#deploy-form [aria-invalid]").forEach(el => el.removeAttribute("aria-invalid"));
+  setKind("static");
+  $("#d-domain").value = BOOT.defaultDomain;   // reset() would pick the first option alphabetically
+  if (prefill.domain) $("#d-domain").value = prefill.domain;
+  if (prefill.sub) $("#d-sub").value = prefill.sub;
+  if (prefill.project) $("#d-project").value = prefill.project;
+  if (prefill.node && $("#d-node")) $("#d-node").value = prefill.node;
+  deployPreview();
+  openDialog($("#deploy-sheet"));
+  $("#d-repo").focus();
 }
 
-// ── System stats ──────────────────────────────────────────────────────────────
-async function pollSysinfo() {
-  try {
-    const r = await fetch('api/sysinfo');
-    const d = await r.json();
+$("#deploy-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = msg => { $("#d-error").innerHTML = `${icon("alert")}<span>${esc(msg)}</span>`; $("#d-error").hidden = false; };
+  $("#d-error").hidden = true;
+  const repo = $("#d-repo").value.trim();
+  const sub = $("#d-sub").value.trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+  const dom = $("#d-domain").value;
+  const port = deployKind === "app" ? $("#d-port").value.trim() : "";
+  const unit = deployKind === "app" ? $("#d-unit").value.trim() : "";
+  $("#d-repo").setAttribute("aria-invalid", !repo);
+  if (!repo) return err("Add the repository URL."), $("#d-repo").focus();
+  if (sub && !SUB_RE.test(sub)) return err("The address can only use lowercase letters, numbers, hyphens and dots."), $("#d-sub").focus();
+  if (hostTaken(sub, dom)) return err(`${hostFor(sub, dom)} is already deployed — update it instead.`);
+  if (deployKind === "app") {
+    const p = Number(port);
+    $("#d-port").setAttribute("aria-invalid", !(Number.isInteger(p) && p >= 1 && p <= 65535));
+    if (!(Number.isInteger(p) && p >= 1 && p <= 65535)) return err("An app server needs a port between 1 and 65535."), $("#d-port").focus();
+    if (unit && !UNIT_RE.test(unit)) return err("That systemd service name has characters it can't use."), $("#d-unit").focus();
+  }
+  if (!sub) {
+    const go = await confirmDialog({ title: `Deploy to ${dom} itself?`, body: "This becomes the domain's landing page and replaces whatever is there now.", confirm: "Deploy" });
+    if (!go) return;
+  }
+  const res = await busy($("#d-submit"), () => api("api/deploy", {
+    repo_url: repo, subdomain: sub, domain: dom, port: port || null, service_name: unit,
+    project: $("#d-project").value.trim(), node: $("#d-node") ? $("#d-node").value : BOOT.localNode,
+  }));
+  if (!res.ok) return err(res.error);
+  $("#deploy-sheet").close();
+  toast(res.message, "ok");
+  state.view = "sites"; syncView();
+  await pollStatus();
+  openLogs(keyFor(sub, dom));
+});
 
-    const cpuPct = d.cpu_percent;
-    const ramPct = d.ram_percent;
+// ── Redirect sheet ────────────────────────────────────────────────────────
+function openRedirect() {
+  $("#redirect-form").reset();
+  $("#r-domain").value = BOOT.defaultDomain;
+  $("#r-error").hidden = true;
+  openDialog($("#redirect-sheet"));
+  $("#r-sub").focus();
+}
+$("#redirect-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = msg => { $("#r-error").innerHTML = `${icon("alert")}<span>${esc(msg)}</span>`; $("#r-error").hidden = false; };
+  const sub = $("#r-sub").value.trim().toLowerCase(), target = $("#r-target").value.trim();
+  if (sub && !SUB_RE.test(sub)) return err("The address can only use lowercase letters, numbers, hyphens and dots.");
+  if (!target) return err("Add where it should redirect to."), $("#r-target").focus();
+  const res = await busy(e.submitter, () => api("api/redirect/add", {
+    subdomain: sub, domain: $("#r-domain").value, target, preserve_path: $("#r-keep").checked,
+  }));
+  if (!res.ok) return err(res.error);
+  $("#redirect-sheet").close();
+  toast(res.message, "ok");
+  state.view = "redirects"; syncView();
+  pollStatus();
+});
 
-    const cpuBar = document.getElementById('cpu-bar');
-    const ramBar = document.getElementById('ram-bar');
+// ── Domain sheet ──────────────────────────────────────────────────────────
+function openDomain() {
+  $("#domain-form").reset();
+  $("#n-report").innerHTML = "";
+  openDialog($("#domain-sheet"));
+  $("#n-domain").focus();
+}
+const domainBody = () => ({
+  domain: $("#n-domain").value.trim().toLowerCase().replace(/^\.+|\.+$/g, ""),
+  zone_id: $("#n-zone").value.trim().toLowerCase(),
+});
+const noticeHTML = (kind, html) => `<div class="notice ${kind}">${icon(kind === "ok" ? "check" : kind ? "alert" : "info")}<span>${html}</span></div>`;
+["#n-domain", "#n-zone"].forEach(s => $(s).addEventListener("input", () => { $("#n-report").innerHTML = ""; }));
 
-    cpuBar.style.width = cpuPct + '%';
-    cpuBar.className   = 'stat-bar cpu' + (cpuPct >= 90 ? ' crit' : cpuPct >= 70 ? ' warn' : '');
+$("#n-check").addEventListener("click", async e => {
+  const body = domainBody();
+  if (!body.domain) return $("#n-domain").focus();
+  const d = await busy(e.currentTarget, () => api("api/domains/check", body));
+  if (!d.ok) return $("#n-report").innerHTML = noticeHTML("bad", esc(d.error));
+  const lines = [];
+  if (d.configured) lines.push(noticeHTML("warn", `<b>${esc(d.domain)}</b> is already connected.`));
+  if (d.error) lines.push(noticeHTML("bad", esc(d.error)));
+  else {
+    lines.push(noticeHTML("ok", `Cloudflare zone found <code>${esc(d.zone_id)}</code>`));
+    lines.push(d.zone_status && d.zone_status !== "active"
+      ? noticeHTML("warn", `Zone status is <b>${esc(d.zone_status)}</b>. Point the nameservers at Cloudflare; it goes live once they propagate.`)
+      : noticeHTML("ok", "Nameservers are on Cloudflare."));
+  }
+  lines.push(d.in_tunnel ? noticeHTML("ok", "The tunnel already routes this domain.")
+    : noticeHTML("warn", `The tunnel doesn't route it yet. Connect adds <code>${esc(d.domain)}</code> and <code>*.${esc(d.domain)}</code>.`));
+  $("#n-report").innerHTML = lines.join("");
+});
 
-    ramBar.style.width = ramPct + '%';
-    ramBar.className   = 'stat-bar ram' + (ramPct >= 90 ? ' crit' : ramPct >= 75 ? ' warn' : '');
+$("#domain-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const body = domainBody();
+  if (!body.domain) return $("#n-domain").focus();
+  const d = await busy($("#n-connect"), () => api("api/domains/add", body));
+  if (!d.ok) return $("#n-report").innerHTML = noticeHTML("bad", esc(d.error));
+  $("#n-report").innerHTML = [noticeHTML("ok", `<b>${esc(d.domain)}</b> connected — zone <code>${esc(d.zone_id)}</code>`),
+    ...(d.warnings || []).map(w => noticeHTML("warn", esc(w)))].join("");
+  toast(d.message, "ok");
+  // Domain pickers are rendered server-side, so reload once warnings are read
+  setTimeout(() => location.reload(), (d.warnings || []).length ? 6000 : 1500);
+});
 
-    document.getElementById('cpu-val').textContent = cpuPct.toFixed(1) + '%';
-    document.getElementById('ram-val').textContent =
-      `${d.ram_used_mb} / ${d.ram_total_mb} MB`;
-  } catch(e) {}
+// ── Site sheet ────────────────────────────────────────────────────────────
+function openSite(k) {
+  state.site = k;
+  $("#site-sheet")._html = null;
+  renderSite(true);
+  openDialog($("#site-sheet"));
+}
+$("#site-sheet").addEventListener("close", () => { state.site = null; });
+
+function kv(label, value) { return value ? `<div class="item"><span class="grow s" style="white-space:normal">${esc(label)}</span><span class="t" style="text-align:right;overflow-wrap:anywhere">${value}</span></div>` : ""; }
+
+function renderSite(first) {
+  const k = state.site, s = svcOf(k);
+  if (!state.services[k]) { $("#site-sheet").close(); return; }
+  const r = state.resources[k] || {};
+  const paused = s.status === "paused", busyNow = BUSY.has(s.status), remote = isRemote(k), redirect = !!s.redirect_to;
+
+  $("#s-title").textContent = fqdnOf(k);
+  $("#s-sub").innerHTML = `${badge(s.status)} ${remote ? `<span class="chip">${esc(nodeLabel(nodeOf(k)))}</span>` : ""}
+    <a href="https://${esc(fqdnOf(k))}" target="_blank" rel="noopener" style="margin-left:6px">Open ${icon("external", 'style="width:13px;height:13px;vertical-align:-2px"')}</a>`;
+
+  // Only rebuild the form body on open — polling re-renders would wipe typing.
+  // Live bits (status, resources, lists) update through their own ids below.
+  if (first) {
+    const exts = !redirect && !remote;
+    $("#s-body").innerHTML = `
+      <div class="actionbar">
+        ${redirect ? "" : `<button class="btn" data-sact="update" data-busy="Updating">${icon("update")}Update</button>
+        <button class="btn" data-sact="restart" data-busy="Restarting">${icon("restart")}Restart</button>`}
+        <button class="btn" data-sact="pause" id="s-pause"></button>
+        ${redirect ? `<button class="btn" data-sact="open">${icon("external")}Open</button>` : `<button class="btn" data-sact="logs">${icon("logs")}Logs</button>`}
+      </div>
+
+      <div class="items" id="s-facts"></div>
+
+      ${redirect ? `
+      <form class="fset" id="s-redir">
+        <h3 class="fset-title">Redirect target</h3>
+        <div class="field"><label for="s-rt" class="sr-only">Target URL</label><input class="input" id="s-rt" autocomplete="off" spellcheck="false"></div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <label class="check"><input type="checkbox" id="s-rk"> Keep the path</label><span style="flex:1"></span>
+          <button class="btn primary" type="submit" data-busy="Saving">Save redirect</button>
+        </div>
+      </form>` : ""}
+
+      <form class="fset" id="s-general">
+        <h3 class="fset-title">Settings</h3>
+        <div class="fgrid">
+          <div class="field"><label for="s-project">Project</label><input class="input" id="s-project" list="projects" placeholder="Ungrouped" autocomplete="off"></div>
+          ${redirect ? "" : `<div class="field"><label for="s-unit">systemd service</label><input class="input" id="s-unit" placeholder="${s.port ? "Needed to stop the app" : "Only for app servers"}" autocomplete="off" spellcheck="false"></div>`}
+        </div>
+        ${!redirect && s.port && !s.service_name ? noticeHTML("warn", "No service is set, so Pause won't stop this app and Update won't restart it.") : ""}
+        <div style="display:flex;justify-content:flex-end"><button class="btn primary" type="submit" data-busy="Saving">Save</button></div>
+      </form>
+
+      ${exts ? `
+      <div class="fset">
+        <h3 class="fset-title">Path extensions</h3>
+        <p class="help">Serve another repo at a path on this site, like ${esc(fqdnOf(k))}/blog. Leave the port empty for static files.</p>
+        <div class="items" id="s-exts"></div>
+        <form class="addrow" id="s-ext-add">
+          <input class="input" id="s-ep" placeholder="/blog" aria-label="Path" autocomplete="off" spellcheck="false">
+          <input class="input" id="s-er" placeholder="https://github.com/…" aria-label="Repository URL" autocomplete="off" spellcheck="false">
+          <input class="input" id="s-eo" placeholder="Port" inputmode="numeric" aria-label="Port (optional)">
+          <button class="btn" type="submit" data-busy="Adding">Add</button>
+        </form>
+      </div>` : ""}
+
+      ${redirect ? "" : `
+      <div class="fset">
+        <h3 class="fset-title">Nested sites</h3>
+        <p class="help">Deploy a separate site under this one, like api.${esc(fqdnOf(k))}. Cloudflare's free certificate only covers one subdomain level, so browsers may warn on deeper names.</p>
+        <div class="items" id="s-kids"></div>
+        <form class="addrow" id="s-kid-add">
+          <input class="input" id="s-kn" placeholder="api" aria-label="Name" autocomplete="off" spellcheck="false">
+          <input class="input" id="s-kr" placeholder="https://github.com/…" aria-label="Repository URL" autocomplete="off" spellcheck="false">
+          <input class="input" id="s-ko" placeholder="Port" inputmode="numeric" aria-label="Port (optional)">
+          <button class="btn" type="submit" data-busy="Deploying">Deploy</button>
+        </form>
+      </div>`}
+
+      ${!redirect && !remote ? `
+      <details class="more">
+        <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>Move or rename</summary>
+        <form class="fset card-inset" id="s-move">
+          <p class="help">Files stay where they are. Only nginx and DNS change, and the old address stops working.</p>
+          <div class="segmented wide" role="group" aria-label="Move type">
+            <button type="button" data-mv="rename" aria-pressed="true">Rename</button>
+            <button type="button" data-mv="extension" aria-pressed="false">Under a site as /path</button>
+            <button type="button" data-mv="subdomain" aria-pressed="false">Under a site as subdomain</button>
+          </div>
+          <div class="fgrid">
+            <div class="field" id="mv-parent-f" hidden><label for="mv-parent">Parent site</label><select class="input" id="mv-parent"></select></div>
+            <div class="field"><label for="mv-name">New name</label><input class="input" id="mv-name" autocomplete="off" spellcheck="false"></div>
+            <div class="field" id="mv-domain-f"><label for="mv-domain">Domain</label><select class="input" id="mv-domain">${BOOT.domains.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join("")}</select></div>
+          </div>
+          <div class="preview" id="mv-preview"></div>
+          <div style="display:flex;justify-content:flex-end"><button class="btn primary" type="submit" data-busy="Moving">Move…</button></div>
+        </form>
+      </details>` : ""}
+      ${remote && !redirect ? noticeHTML("", `Path extensions and moves are only available for sites on ${esc(nodeLabel(BOOT.localNode))}.`) : ""}
+
+      <div style="display:flex;justify-content:flex-start;padding-top:4px;border-top:0.5px solid var(--separator)">
+        <button class="btn plain danger" data-sact="delete" style="margin-top:12px">${icon("trash")}Remove ${redirect ? "redirect" : "site"}…</button>
+      </div>`;
+    wireSite(k);
+    // Initial values
+    if ($("#s-project")) $("#s-project").value = s.project || "";
+    if ($("#s-unit")) $("#s-unit").value = s.service_name || "";
+    if ($("#s-rt")) { $("#s-rt").value = s.redirect_to || ""; $("#s-rk").checked = !!s.preserve_path; }
+    if ($("#mv-name")) { $("#mv-name").value = labelOf(k); $("#mv-domain").value = domainOf(k); setMove("rename"); }
+  }
+
+  // Live parts
+  const pb = $("#s-pause");
+  if (pb && !pb.disabled) pb.innerHTML = paused ? `${icon("play")}Resume` : `${icon("pause")}Pause`;
+  $$("#s-body [data-sact=update], #s-body [data-sact=restart]").forEach(b => { if (!b.querySelector(".spin")) b.disabled = busyNow || (b.dataset.sact === "restart" && paused); });
+
+  const up = fmtUptime(r.uptime_s);
+  patch($("#s-facts"), [
+    redirect ? kv("Redirects to", esc(s.redirect_to) + (s.preserve_path ? " (keeps path)" : "")) :
+      kv("Repository", s.repo_url ? `<a href="${esc(s.repo_url)}" target="_blank" rel="noopener">${esc(repoShort(s.repo_url))}</a>` : ""),
+    redirect ? "" : kv("Type", s.port ? `App server on port ${esc(s.port)}` : "Static files"),
+    MULTI_NODE ? kv("Machine", esc(nodeLabel(nodeOf(k)))) : "",
+    kv("Deployed", s.deployed_at ? esc(fmtAgo(s.deployed_at)) : ""),
+    kv("Last updated", s.updated_at ? esc(fmtAgo(s.updated_at)) : ""),
+    redirect ? "" : kv("Resources", [r.cpu != null ? `CPU ${r.cpu.toFixed(1)}%` : "", r.ram_mb != null ? `RAM ${fmtMB(r.ram_mb)}` : "",
+      r.disk_mb != null ? `Disk ${fmtMB(r.disk_mb)}` : "", up ? `up ${up}` : ""].filter(Boolean).join(" · ")),
+    s.service_name && r.unit_active === false && !paused ? kv("App", `<span style="color:var(--red)">${esc(s.service_name)} is stopped</span>`) : "",
+  ].join(""));
+
+  if ($("#s-exts")) {
+    const exts = s.extensions || {};
+    patch($("#s-exts"), Object.keys(exts).sort().map(p => {
+      const e = exts[p];
+      return `<div class="item">
+        <div class="grow"><div class="t">/${esc(p)} ${e.status && e.status !== "online" ? badge(e.status) : ""}</div>
+        <div class="s">${e.port ? "App on port " + esc(e.port) : esc(repoShort(e.repo_url))}</div></div>
+        ${e.repo_url ? `<button class="icon-btn" data-ext="update" data-path="${esc(p)}" data-fid="eu:${esc(p)}" aria-label="Update /${esc(p)}" title="Update">${icon("update")}</button>` : ""}
+        <button class="icon-btn" data-ext="detach" data-path="${esc(p)}" data-fid="ed:${esc(p)}" aria-label="Make /${esc(p)} its own site" title="Make it its own site">${icon("external")}</button>
+        <button class="icon-btn" data-ext="remove" data-path="${esc(p)}" data-fid="er:${esc(p)}" aria-label="Remove /${esc(p)}" title="Remove" style="color:var(--red)">${icon("trash")}</button>
+      </div>`;
+    }).join("") || `<div class="none">No path extensions.</div>`);
+  }
+  if ($("#s-kids")) {
+    const kids = Object.keys(state.services).filter(n => n !== k && fqdnOf(n).endsWith("." + fqdnOf(k))).sort();
+    patch($("#s-kids"), kids.map(n => `<div class="item">
+        <span class="dot s-${esc(svcOf(n).status)}" style="margin-right:2px"></span>
+        <div class="grow"><div class="t">${esc(fqdnOf(n))}</div><div class="s">${esc(statusLabel(svcOf(n).status))}</div></div>
+        <button class="icon-btn" data-kid="${esc(n)}" data-fid="kid:${esc(n)}" aria-label="Open ${esc(fqdnOf(n))}">${icon("chevronR")}</button>
+      </div>`).join("") || `<div class="none">No nested sites.</div>`);
+  }
 }
 
-setInterval(pollSysinfo, 3000);
-pollSysinfo();
-
-// ── Toast ─────────────────────────────────────────────────────────────────────
-let toastTimer;
-function toast(msg, type='inf') {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.className = type;
-  el.style.display = 'block';
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.style.display = 'none', 4000);
+let moveMode = "rename";
+function setMove(mode) {
+  moveMode = mode;
+  $$("#s-move [data-mv]").forEach(b => b.setAttribute("aria-pressed", b.dataset.mv === mode));
+  $("#mv-parent-f").hidden = mode === "rename";
+  $("#mv-domain-f").hidden = mode !== "rename";
+  $("#mv-name").placeholder = mode === "rename" ? "Leave empty for the landing page" : "name";
+  movePreview();
 }
+function movePreview() {
+  const nm = $("#mv-name").value.trim().toLowerCase(), parent = $("#mv-parent").value;
+  const target = moveMode === "rename" ? `https://${hostFor(nm, $("#mv-domain").value)}${nm ? "" : " (landing page)"}`
+    : moveMode === "extension" ? `https://${fqdnOf(parent)}/${nm || "name"}/`
+    : `https://${nm || "name"}.${fqdnOf(parent)}`;
+  const same = moveMode === "rename" && hostFor(nm, $("#mv-domain").value) === fqdnOf(state.site);
+  $("#mv-preview").innerHTML = same ? `${icon("info")}<span>That's its current address — pick a new name or domain.</span>`
+                                    : `${icon("arrow")}<span>${esc(target)}</span>`;
+  const submit = $("#s-move [type=submit]");
+  if (submit) submit.disabled = same;
+}
+
+function wireSite(k) {
+  const body = $("#s-body");
+  body.onclick = async e => {
+    const b = e.target.closest("[data-sact]");
+    if (b) {
+      const a = b.dataset.sact, s = svcOf(k);
+      if (a === "update") await busy(b, () => doUpdate(k));
+      else if (a === "restart") await busy(b, () => doRestart(k));
+      else if (a === "pause") await busy(b, () => doPause(k, s.status !== "paused"));
+      else if (a === "logs") openLogs(k);
+      else if (a === "open") window.open(`https://${fqdnOf(k)}`, "_blank", "noopener");
+      else if (a === "delete") doDelete(k);
+      renderSite();
+      return;
+    }
+    const ex = e.target.closest("[data-ext]");
+    if (ex) return extAction(k, ex.dataset.ext, ex.dataset.path, ex);
+    const kid = e.target.closest("[data-kid]");
+    if (kid) { $("#site-sheet").close(); setTimeout(() => openSite(kid.dataset.kid), 180); }
+  };
+
+  $("#s-general").onsubmit = async e => {
+    e.preventDefault();
+    const payload = { subdomain: k, project: $("#s-project").value.trim() };
+    if ($("#s-unit")) {
+      const u = $("#s-unit").value.trim().replace(/\.service$/, "");
+      if (u && !UNIT_RE.test(u)) return toast("That systemd service name has characters it can't use.", "err");
+      payload.service_name = u;
+    }
+    const res = await busy(e.submitter, () => api("api/edit", payload));
+    report(res, "Settings saved.");
+    if (res.ok) { await pollStatus(); renderSite(true); }
+  };
+
+  if ($("#s-redir")) $("#s-redir").onsubmit = async e => {
+    e.preventDefault();
+    const res = await busy(e.submitter, () => api("api/redirect/edit", { subdomain: k, target: $("#s-rt").value.trim(), preserve_path: $("#s-rk").checked }));
+    report(res);
+    if (res.ok) pollStatus();
+  };
+
+  if ($("#s-ext-add")) $("#s-ext-add").onsubmit = async e => {
+    e.preventDefault();
+    const path = $("#s-ep").value.trim().replace(/^\/+|\/+$/g, "").toLowerCase();
+    const repo = $("#s-er").value.trim(), port = $("#s-eo").value.trim();
+    if (!/^[a-z0-9-]+$/.test(path)) return toast("A path can use lowercase letters, numbers and hyphens.", "err");
+    if (!repo && !port) return toast("Add a repo URL, a port, or both.", "err");
+    const res = await busy(e.submitter, () => api("api/ext/add", { subdomain: k, path, repo_url: repo, port: port || null }));
+    report(res);
+    if (res.ok) { e.target.reset(); pollStatus(); }
+  };
+
+  if ($("#s-kid-add")) $("#s-kid-add").onsubmit = async e => {
+    e.preventDefault();
+    const label = $("#s-kn").value.trim().toLowerCase().replace(/\.+$/, "");
+    const repo = $("#s-kr").value.trim(), port = $("#s-ko").value.trim();
+    if (!SUB_RE.test(label)) return toast("Give the nested site a name like api.", "err");
+    if (!repo) return toast("Add the repository URL.", "err");
+    // Nest under the parent's own label on the parent's domain and machine —
+    // the old form always used the default domain, so nesting under a site on
+    // example.org produced api.site.example.org.example.com.
+    const parentLabel = labelOf(k);
+    const res = await busy(e.submitter, () => api("api/deploy", {
+      repo_url: repo, subdomain: parentLabel ? `${label}.${parentLabel}` : label,
+      domain: domainOf(k), node: nodeOf(k), port: port || null, project: svcOf(k).project || "",
+    }));
+    report(res);
+    if (res.ok) { e.target.reset(); pollStatus(); }
+  };
+
+  if ($("#s-move")) {
+    const others = Object.keys(state.services).filter(n => n !== k && !svcOf(n).redirect_to && !isRemote(n)).sort((a, b) => fqdnOf(a).localeCompare(fqdnOf(b)));
+    $("#mv-parent").innerHTML = others.map(n => `<option value="${esc(n)}">${esc(fqdnOf(n))}</option>`).join("");
+    $$("#s-move [data-mv]").forEach(b => b.onclick = () => setMove(b.dataset.mv));
+    ["#mv-name", "#mv-domain", "#mv-parent"].forEach(s => $(s).addEventListener("input", movePreview));
+    $("#s-move").onsubmit = async e => {
+      e.preventDefault();
+      const nm = $("#mv-name").value.trim().toLowerCase(), parent = $("#mv-parent").value;
+      if (moveMode !== "rename" && !parent) return toast("There's no other site to move it under.", "err");
+      if (moveMode !== "rename" && !nm) return toast("Give it a name.", "err");
+      const to = $("#mv-preview").textContent;
+      const ok = await confirmDialog({ title: `Move ${fqdnOf(k)}?`, body: `It will become <b>${esc(to)}</b>. The old address stops working and its DNS record is removed.`, confirm: "Move" });
+      if (!ok) return;
+      const [url, payload] = moveMode === "extension" ? ["api/convert/extension", { subdomain: k, parent, path: nm }]
+        : moveMode === "subdomain" ? ["api/convert/subdomain", { subdomain: k, new_subdomain: labelOf(parent) ? `${nm}.${labelOf(parent)}` : nm, domain: domainOf(parent) }]
+        : ["api/convert/subdomain", { subdomain: k, new_subdomain: nm, domain: $("#mv-domain").value }];
+      const res = await busy(e.submitter, () => api(url, payload));
+      report(res);
+      if (res.ok) { $("#site-sheet").close(); pollStatus(); pollResources(); }
+    };
+  }
+}
+
+async function extAction(k, act, path, btn) {
+  if (act === "update") return report(await busy(btn, () => api("api/ext/update", { subdomain: k, path })));
+  if (act === "remove") {
+    const ok = await confirmDialog({ title: `Remove /${path}?`, body: `Its files will be deleted from ${esc(fqdnOf(k))}.`, confirm: "Remove", destructive: true });
+    if (!ok) return;
+    report(await api("api/ext/remove", { subdomain: k, path }));
+  } else if (act === "detach") {
+    const name = await confirmDialog({ title: `Make /${path} its own site`, body: `It gets its own address on ${esc(domainOf(k))}. Files aren't re-uploaded.`,
+      confirm: "Detach", input: { label: "Subdomain", value: path, placeholder: path } });
+    if (!name) return;
+    report(await api("api/convert/detach", { subdomain: k, path, new_subdomain: name.toLowerCase() }));
+  }
+  pollStatus();
+}
+
+// ── Logs panel ────────────────────────────────────────────────────────────
+let logTimer = null;
+function openLogs(k) {
+  state.log.key = k;
+  state.log.data = { all: [], errors: [] };
+  state.log.stick = true;
+  $("#l-sub").textContent = fqdnOf(k);
+  $("#l-body").innerHTML = `<div class="none">Loading…</div>`;
+  $("#l-body")._html = null;
+  openDialog($("#log-panel"));
+  refreshLogs();
+  clearInterval(logTimer);
+  logTimer = setInterval(() => { if (!document.hidden) refreshLogs(); }, 2500);
+}
+async function refreshLogs() {
+  const k = state.log.key;
+  if (!k) return;
+  const d = await api(`api/logs/${encodeURIComponent(k)}`);
+  if (k !== state.log.key) return;
+  if (d.ok === false && d.error) { $("#l-body").innerHTML = `<div class="none">${esc(d.error)}</div>`; return; }
+  state.log.data = d;
+  $("#l-nerr").textContent = (d.errors || []).length || "";
+  const body = $("#l-body");
+  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+  patch(body, renderLogLines(d[state.log.tab], state.log.tab === "errors" ? "No errors or warnings." : "No log output yet."));
+  if (atBottom || state.log.stick) { body.scrollTop = body.scrollHeight; state.log.stick = false; }
+}
+$$("#log-panel [data-tab]").forEach(b => b.addEventListener("click", () => {
+  state.log.tab = b.dataset.tab; state.log.stick = true;
+  $$("#log-panel [data-tab]").forEach(x => x.setAttribute("aria-pressed", x === b));
+  refreshLogs();
+}));
+$("#log-panel").addEventListener("close", () => { clearInterval(logTimer); state.log.key = null; });
+$("#l-copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText((state.log.data[state.log.tab] || []).join("")); toast("Logs copied.", "ok"); }
+  catch { toast("Couldn't copy — select the text instead.", "err"); }
+});
+
+// ── Controls ──────────────────────────────────────────────────────────────
+function syncView() {
+  store.set("view", state.view);
+  $$("[data-view]").forEach(b => b.setAttribute("aria-pressed", b.dataset.view === state.view));
+  render();
+}
+$$("[data-view]").forEach(b => b.addEventListener("click", () => { state.view = b.dataset.view; syncView(); }));
+$("#sort").value = state.sort;
+$("#sort").addEventListener("change", e => { state.sort = e.target.value; store.set("sort", state.sort); render(); });
+$("#filter").addEventListener("change", e => { state.filter = e.target.value; render(); });
+$("#q").addEventListener("input", e => { state.q = e.target.value.trim().toLowerCase(); render(); });
+$("#q").addEventListener("keydown", e => { if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.target.value = ""; state.q = ""; render(); } });
+
+document.addEventListener("keydown", e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || document.querySelector("dialog[open]")) return;
+  if (e.target.closest("input, textarea, select")) return;
+  if (e.key === "/") { e.preventDefault(); $("#q").focus(); }
+  else if (e.key === "n") { e.preventDefault(); openDeploy(); }
+});
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+syncView();
+every(4000, pollStatus);
+every(10000, pollResources);
+every(5000, pollSys);
+every(15000, pollNodes);
+renderFleet();
 </script>
 </body>
 </html>

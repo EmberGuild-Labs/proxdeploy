@@ -33,6 +33,7 @@ Browser / CLI
 - [Design notes and decisions](#design-notes-and-decisions)
 - [Troubleshooting](#troubleshooting)
 - [Security](#security)
+- [Changelog](#changelog)
 - [License](#license)
 
 ---
@@ -44,11 +45,14 @@ Browser / CLI
 | **One-click deploys** | Repo URL + subdomain → live HTTPS site |
 | **Static and dynamic sites** | Static files served by nginx; give it a port and it reverse-proxies instead |
 | **Multi-domain** | Deploy to any number of domains from one dashboard |
+| **Connect a domain from the UI** | The **+ Domain** button (or `proxdeploy domain add`) finds the Cloudflare zone, routes the apex and wildcard through your tunnel, and adds it to `.env` — no restart |
+| **Domains in other Cloudflare accounts** | Per-domain token and tunnel overrides for a zone that isn't in your main account |
 | **Landing pages** | Deploy to a domain's root (apex), not just subdomains |
 | **Path extensions** | Mount a second repo at `site.example.com/blog/` |
 | **Redirects** | A "site" that is just a 301 to somewhere else |
 | **Convert without re-uploading** | Rename a site, move it to another domain, or turn it into a path extension — files never move |
 | **Pause / resume** | Swap a site for a lightweight "paused" page and stop its process to free RAM |
+| **Nested sites** | Deploy `api.blog.example.com` under an existing site from its card |
 | **Live logs** | Per-site log panel with an errors-and-warnings-only tab |
 | **Resource stats** | Per-site disk usage, CPU, RAM, and uptime; plus whole-machine CPU/RAM |
 | **Private repos** | Optional GitHub token, redacted from logs |
@@ -71,7 +75,7 @@ All of that happens on a background thread, so the UI stays responsive. Watch
 the Logs panel for progress.
 
 **Nothing is ever exposed directly to the internet.** Flask binds to
-`localhost:2096`. All inbound traffic arrives through a Cloudflare Tunnel,
+`127.0.0.1:2096` (change it with `PORT`). All inbound traffic arrives through a Cloudflare Tunnel,
 which hands it to nginx. Your home IP address is never published.
 
 ---
@@ -106,6 +110,8 @@ cd proxdeploy
 - **Looks up your zone IDs automatically** — you type domain names, not hex strings
 - **Auto-detects your tunnel UUID** from `cloudflared tunnel list`
 - **Generates `SECRET_KEY` and `API_KEY`** for you and writes `.env` at mode `600`
+- **Asks for your dashboard password** (hidden, typed twice, 12+ characters) and stores only a bcrypt hash in `config.json`
+- **Installs `proxdeploy-ingress`**, the small root helper the **+ Domain** button uses to edit the tunnel config safely
 - **Builds the sudoers rule** from `which`-resolved paths, validates it with `visudo -c`, and refuses to install it if it doesn't parse
 - **Installs and starts the systemd service**, generated for your actual user and directory
 - **Adds tunnel ingress rules** for the dashboard and a `*.yourdomain` wildcard, keeping the `http_status:404` catch-all last
@@ -116,8 +122,16 @@ Nothing is written to your system until an explicit confirmation prompt, every
 file it replaces is backed up as `*.bak-<timestamp>`, and it's safe to re-run —
 it detects an existing `.env` and won't clobber it without asking.
 
-The only thing left afterwards is opening the dashboard and setting your
-password.
+Afterwards, open the dashboard and sign in with the password you chose.
+
+### Changing your password, keys or tokens
+
+| To change | Do this |
+|---|---|
+| Dashboard password | `./setup.sh --password` — takes effect immediately |
+| Cloudflare token, GitHub token, domains | Edit `.env`, then `sudo systemctl restart proxdeploy` |
+| `API_KEY` (CLI access) | Generate one with `python3 -c "import secrets;print(secrets.token_hex(32))"`, put it in `.env`, restart, then run `proxdeploy setup` on your laptop |
+| Everything at once | Re-run `./setup.sh`; it backs up the old `.env` first |
 
 ### Manual
 
@@ -168,7 +182,7 @@ systemctl is-active  proxdeploy nginx cloudflared   # 3x "active"
 `cli/proxdeploy` is an optional command-line client. It exists because
 Cloudflare's bot protection blocks non-browser HTTP clients hitting the
 dashboard's public hostname — so instead of going through Cloudflare, the CLI
-SSHes into the box and curls `http://localhost:2096` from the inside.
+SSHes into the box and curls the dashboard on `localhost` from the inside.
 
 Install it on your laptop (not the server):
 
@@ -181,18 +195,24 @@ proxdeploy setup
 ```
 
 `proxdeploy setup` asks for the host, SSH user, SSH password (leave blank to
-use key-based auth — **recommended**), your default domain, and the `API_KEY`
+use key-based auth — **recommended**), the dashboard port, your default domain, and the `API_KEY`
 you put in the server's `.env`. It writes them to `~/.proxdeploy` with mode
 `600`.
 
 ```
 proxdeploy status                              list all deployed sites
 proxdeploy domains                             list domains available to deploy to
+proxdeploy domain check <domain>               is a domain ready to connect? (read-only)
+proxdeploy domain add   <domain> [zone_id]     connect a new domain
 proxdeploy sysinfo                             CPU and RAM usage
 proxdeploy deploy <repo_url> <site>            deploy a static site
-proxdeploy deploy <repo_url> <site> <port>     deploy a dynamic (reverse-proxy) site
+proxdeploy deploy <repo_url> <site> <port> [--service unit]
+                                               deploy a dynamic (reverse-proxy) site
 proxdeploy update  <site>                      git pull + nginx reload
 proxdeploy restart <site>                      reload nginx (+ restart its systemd unit)
+proxdeploy pause   <site>                      show the paused page and stop its unit
+proxdeploy resume  <site>                      bring a paused site back
+proxdeploy service <site> <unit|->             set the systemd unit Pause/Update act on
 proxdeploy delete  <site>                      remove site, nginx config, DNS record
 proxdeploy logs    <site> [--errors]           last 200 log lines
 ```
@@ -284,6 +304,14 @@ commented version.
 | `API_KEY` | no | Enables the CLI. Blank disables API-key auth entirely |
 | `GITHUB_TOKEN` | no | Deploy/update private repos. Redacted from logs |
 | `PUBLIC_STATUS` | no | Site keys allowed on the public status feed. Blank → endpoint 404s |
+| `PORT` | no | Dashboard port. Default `2096` |
+| `BIND` | no | Dashboard bind address. Default `127.0.0.1` — leave it |
+| `LOCAL_LABEL` | no | What the dashboard calls this machine. Default `This Pi` |
+| `DOMAIN_<NAME>_TOKEN` | no | Cloudflare token for a domain in a *different* account, e.g. `DOMAIN_EXAMPLE_NET_TOKEN` |
+| `DOMAIN_<NAME>_TUNNEL` | with the above | A tunnel in that other account — a tunnel only routes zones in its own account |
+
+The dashboard password is **not** an environment variable. It lives as a bcrypt
+hash in `config.json`; set it with `./setup.sh --password`.
 
 > `.env` is read by **systemd**, not a shell. No quotes, no spaces around `=`,
 > no inline comments on a value line. This trips everyone up once.
@@ -299,6 +327,8 @@ session.
 |---|---|---|
 | `GET` | `/api/status` | All services and their metadata |
 | `GET` | `/api/domains` | Configured domains and whether each is usable |
+| `POST` | `/api/domains/check` | `{domain, zone_id?}` — dry run, changes nothing |
+| `POST` | `/api/domains/add` | `{domain, zone_id?}` — look up the zone, route it through the tunnel, add to `.env` |
 | `GET` | `/api/sysinfo` | Machine CPU % and RAM usage |
 | `GET` | `/api/resources` | Per-site disk MB, CPU, RAM, uptime |
 | `GET` | `/api/logs/<site>` | `{"all": [...], "errors": [...]}` |
@@ -326,11 +356,16 @@ session.
 proxdeploy/
 ├── app.py                  Flask backend — all deploy/update/delete/log logic
 ├── requirements.txt        Python dependencies (flask, bcrypt, requests)
-├── proxdeploy.service      systemd unit
+├── proxdeploy.service      systemd unit (setup.sh writes one for your user)
+├── proxdeploy-ingress      Root helper that adds a domain to the tunnel config
+├── setup.sh                Interactive installer; --password changes the password
 ├── .env.example            Environment variable template — copy to .env
 ├── templates/
 │   ├── index.html          Dashboard UI
-│   └── login.html          Login / first-run password setup
+│   └── login.html          Login page
+├── static/
+│   ├── ui.css              Shared styles (light + dark)
+│   └── ui.js               Shared UI helpers
 ├── cli/
 │   └── proxdeploy          Optional command-line client (runs on your laptop)
 ├── docs/
@@ -465,7 +500,7 @@ internet. The headlines:
 
 - Flask binds to `localhost` only — never directly reachable
 - The dashboard sits behind the Cloudflare proxy; your IP is never exposed
-- Password is bcrypt-hashed on first run and stored in `config.json`
+- Password is set by `setup.sh` (or `./setup.sh --password`), bcrypt-hashed, and stored in `config.json`
 - API keys are compared with `secrets.compare_digest` (constant-time)
 - The sudoers rule is scoped to the specific commands ProxDeploy needs
 - The public status endpoint is opt-in per site and 404s when unconfigured
@@ -474,6 +509,33 @@ internet. The headlines:
 for an account you control, not a multi-tenant platform. Anyone with the
 dashboard password or the API key can run code on your machine. Treat both like
 root credentials.
+
+## Changelog
+
+### October 2026
+- **Redesigned dashboard.** New light and dark UI with shared styles in
+  `static/ui.css` and helpers in `static/ui.js`. Every URL is relative, so the
+  dashboard also works when it's mounted under a path.
+- **+ Domain.** You can now connect a new domain from the dashboard or the CLI
+  (`proxdeploy domain check|add`). Tunnel edits go through the root helper
+  `proxdeploy-ingress`, never through blanket sudo on the tunnel config.
+- **Cross-account domains.** A domain in a second Cloudflare account can now
+  have its own token and tunnel (`DOMAIN_<NAME>_TOKEN` / `_TUNNEL`).
+- **CLI.** New commands: `pause`, `resume`, `service`, `domain`, and
+  `deploy --service`. A configurable dashboard port.
+- **The password is set at install time.** `setup.sh` now asks for the
+  dashboard password, and `./setup.sh --password` changes it. Before this,
+  the first visitor to the login page chose it.
+- **Safer defaults.** The dashboard binds to `127.0.0.1` and honours
+  `PORT`/`BIND`. With `SECRET_KEY` missing, it now uses a random key and no
+  longer falls back to a well-known string. The tunnel helper also finds
+  `cloudflared` installed from the `.deb`, at `/usr/bin`.
+- The backend can already deploy to other machines (`NODES`). The worker
+  agent that runs on those machines isn't released yet, so leave `NODES`
+  empty.
+
+### July 2026
+- Initial public release and the interactive `setup.sh` installer.
 
 ## License
 

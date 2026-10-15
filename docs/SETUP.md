@@ -128,10 +128,18 @@ Then open the file with `visudo`, which validates syntax before saving:
 sudo visudo -f /etc/sudoers.d/proxdeploy
 ```
 
+Install the tunnel helper the **+ Domain** button uses. It is the only thing
+that edits `/etc/cloudflared/config.yml`, it accepts nothing but a domain name,
+and it refuses to save a config `cloudflared` can't parse:
+
+```bash
+sudo install -m 0755 -o root -g root ~/proxdeploy/proxdeploy-ingress /usr/local/bin/proxdeploy-ingress
+```
+
 Add one line, built from **your** paths:
 
 ```
-pi ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/bin/systemctl, /usr/bin/git, /usr/bin/chown, /usr/bin/rm
+pi ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/bin/systemctl, /usr/bin/git, /usr/bin/chown, /usr/bin/rm, /usr/local/bin/proxdeploy-ingress
 ```
 
 > **Always use `visudo`, never plain nano.** A syntax error in a sudoers file
@@ -266,13 +274,20 @@ cloudflared tunnel route dns <tunnel-name> deploy.example.com
 
 ---
 
-## Step 7 — First login
+## Step 7 — Set the dashboard password
 
-Open `https://deploy.example.com` in a browser.
+Set it **before** the dashboard is reachable from the internet. Otherwise the
+first person to open the login page gets to choose it:
 
-On first visit you'll be asked to **set the dashboard password**. It is hashed
-with bcrypt and written to `config.json` — the plaintext is never stored. Pick
-something strong; anyone with this password can run code on your machine.
+```bash
+cd ~/proxdeploy && ./setup.sh --password
+```
+
+It is hashed with bcrypt and written to `config.json`; the plaintext is never
+stored. Use at least 12 characters, since anyone with this password can run
+code on your machine. Run the same command any time to change it.
+
+Then open `https://deploy.example.com` and sign in.
 
 ---
 
@@ -290,7 +305,7 @@ proxdeploy setup
 
 Make sure `~/.local/bin` is on your `PATH`.
 
-`setup` asks for host, SSH user, SSH password, default domain, and the `API_KEY`
+`setup` asks for host, SSH user, SSH password, dashboard port, default domain, and the `API_KEY`
 from the server's `.env`, then writes `~/.proxdeploy` with mode `600`.
 
 **Leave the SSH password blank and use key-based auth** if you can:
@@ -329,6 +344,15 @@ ingress covers the hostname.
 ---
 
 ## Adding a second domain later
+
+The easy way: click **+ Domain** in the dashboard, or run
+`proxdeploy domain add example.org`. It finds the zone, routes `example.org`
+and `*.example.org` through your tunnel with `proxdeploy-ingress`, and appends
+the domain to `DOMAINS` in `.env` without a restart. Your Cloudflare token must
+already cover the new zone. A token scoped to **All zones from an account** means
+you never have to edit it again.
+
+By hand:
 
 1. Add the domain to Cloudflare and note its Zone ID.
 2. Edit the **existing** Cloudflare API token to include the new zone under

@@ -14,10 +14,13 @@ from functools import wraps
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
-# Prefix-aware: when nginx mounts the dashboard under a sub-path it sends
-# X-Forwarded-Prefix, and url_for/redirects pick it up automatically.
+# Prefix-aware: when nginx mounts the dashboard under a path such as /deploy/
+# it sends X-Forwarded-Prefix, and url_for/redirects pick it up automatically.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1, x_proto=1)
-app.secret_key = os.environ.get("SECRET_KEY", "change-this-in-production-please")
+# No fallback constant: a well-known default key would let anyone forge a
+# logged-in session cookie. Without SECRET_KEY, sessions just don't survive a
+# restart. setup.sh always writes one.
+app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 CONFIG_FILE  = "config.json"
@@ -26,6 +29,18 @@ LOG_DIR      = "logs"
 WWW_ROOT     = "/var/www"
 NGINX_SITES  = "/etc/nginx/sites-available"
 NGINX_ENABLED = "/etc/nginx/sites-enabled"
+
+# ProxDeploy's own directory — .env lives beside app.py and is rewritten in
+# place when a domain is added, so the path has to be absolute (systemd sets
+# WorkingDirectory, but a stray `cd` in a subprocess must not matter).
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_FILE = os.path.join(BASE_DIR, ".env")
+
+# Cloudflare Tunnel ingress. Connecting a domain means routing two hostnames
+# here (the apex and the wildcard). The file is root-owned, so the write goes
+# through a small root helper rather than giving the app blanket sudo.
+TUNNEL_CONFIG  = os.environ.get("CF_TUNNEL_CONFIG", "/etc/cloudflared/config.yml")
+INGRESS_HELPER = "/usr/local/bin/proxdeploy-ingress"
 
 # ── Domains ───────────────────────────────────────────────────────────────────
 # Multi-domain support. DOMAIN stays the *default* — every service deployed
@@ -68,6 +83,32 @@ def zone_for(domain):
 def valid_domain(domain):
     return (domain or "").lower() in DOMAINS
 
+# A domain can live in a different Cloudflare ACCOUNT from the rest of the
+# fleet. That needs two things no account-wide setting can supply:
+#
+#   DOMAIN_<DOMAIN>_TOKEN    an API token for that other account
+#   DOMAIN_<DOMAIN>_TUNNEL   a tunnel created in that other account
+#
+# The tunnel is not optional there. A <uuid>.cfargotunnel.com CNAME only routes
+# when the tunnel and the zone belong to the same account, so a cross-account
+# domain cannot use the controller's tunnel or any node's — it needs one of its
+# own, and that tunnel wins over the node's for every hostname on the domain.
+#
+# e.g. example.net -> DOMAIN_EXAMPLE_NET_TOKEN / DOMAIN_EXAMPLE_NET_TUNNEL
+#
+# Both are optional and both fall back to the account-wide value, so a domain
+# that sets neither behaves exactly as it did before any of this existed.
+def _domain_env(domain):
+    return (domain or "").strip().lower().replace(".", "_").replace("-", "_").upper()
+
+def domain_token(domain):
+    key = _domain_env(domain)
+    return (os.environ.get(f"DOMAIN_{key}_TOKEN", "").strip() if key else "") or CF_API_TOKEN
+
+def domain_tunnel(domain):
+    key = _domain_env(domain)
+    return os.environ.get(f"DOMAIN_{key}_TUNNEL", "").strip() if key else ""
+
 def make_fqdn(subdomain, domain):
     """'' or '@' means the apex (the bare domain itself)."""
     sub = (subdomain or "").strip().strip(".").lower()
@@ -82,7 +123,9 @@ def service_key(subdomain, domain):
     to be migrated; everything else is keyed by full FQDN, which also means a
     name can never collide across two domains."""
     if (domain or "").lower() == DOMAIN:
-        return (subdomain or "").strip().strip(".").lower()
+        # The default domain's own landing page has no subdomain, and an empty
+        # key can't be looked up by any later route — key it by hostname.
+        return (subdomain or "").strip().strip(".").lower() or DOMAIN
     return make_fqdn(subdomain, domain)
 
 def svc_domain(svc):
@@ -95,6 +138,79 @@ def svc_fqdn(key, svc=None):
     if svc.get("fqdn"):
         return svc["fqdn"]
     return make_fqdn(svc.get("subdomain", key), svc_domain(svc))
+
+# ── Nodes ─────────────────────────────────────────────────────────────────────
+# ProxDeploy runs on one machine (the controller) but can place a site on any
+# machine listed here. The controller keeps the things there can only be one
+# of — config.json, Cloudflare DNS, the domain list, the dashboard. A worker
+# node runs the ProxDeploy agent and owns the per-machine things: the cloned repo,
+# the nginx vhost, the site's systemd unit.
+#
+# "local" always exists and means this machine. Each *remote* node is named in
+# NODES and needs three more variables:
+#
+#   NODES=worker1
+#   NODE_WORKER1_URL=http://worker1.local:2097
+#   NODE_WORKER1_KEY=<that agent's AGENT_API_KEY>
+#   NODE_WORKER1_TUNNEL=<that node's own cloudflared tunnel UUID>
+#
+# The worker agent is not part of this release yet, so leave NODES empty and
+# everything deploys to this machine.
+#
+# The tunnel UUID is what makes a remote node reachable from the internet. A
+# site on the controller CNAMEs to its apex, which resolves to the controller's
+# tunnel; a site on a worker has to point at *that worker's* tunnel instead, or
+# the request lands on the controller where the site does not exist.
+LOCAL_NODE   = "local"
+NODE_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9\-]*$')
+
+def _parse_nodes():
+    """NODES="worker1,worker2" plus NODE_<NAME>_{URL,KEY,TUNNEL} → {name: info}.
+
+    A node with no URL is skipped rather than half-registered — a node the
+    controller cannot reach is worse than one it does not know about, because
+    the dashboard would offer it as a deploy target."""
+    # LABEL / DASHBOARD are cosmetic: what the UI calls the machine ("Pi 2")
+    # and where its own management page is mounted ("/worker1/").
+    nodes = {LOCAL_NODE: {"name": LOCAL_NODE, "url": None, "key": None,
+                          "tunnel_id": CF_TUNNEL_ID, "local": True,
+                          "label": os.environ.get("LOCAL_LABEL", "").strip() or "This Pi",
+                          "dashboard": os.environ.get("LOCAL_DASHBOARD", "").strip() or None}}
+    for raw in os.environ.get("NODES", "").split(","):
+        name = raw.strip().lower()
+        if not name or name == LOCAL_NODE or not NODE_NAME_RE.match(name):
+            continue
+        env = name.upper().replace("-", "_")
+        url = os.environ.get(f"NODE_{env}_URL", "").strip().rstrip("/")
+        if not url:
+            continue
+        nodes[name] = {
+            "name": name,
+            "url": url,
+            "key": os.environ.get(f"NODE_{env}_KEY", "").strip(),
+            "tunnel_id": os.environ.get(f"NODE_{env}_TUNNEL", "").strip(),
+            "local": False,
+            "label": os.environ.get(f"NODE_{env}_LABEL", "").strip() or name,
+            "dashboard": os.environ.get(f"NODE_{env}_DASHBOARD", "").strip() or None,
+        }
+    return nodes
+
+NODES = _parse_nodes()
+
+def valid_node(node):
+    return (node or LOCAL_NODE).lower() in NODES
+
+def svc_node(svc):
+    """Which machine hosts this site. Every record written before nodes
+    existed has no "node" field and is, correctly, local."""
+    return ((svc or {}).get("node") or LOCAL_NODE).lower()
+
+def is_remote(node):
+    return node != LOCAL_NODE and node in NODES
+
+def node_tunnel_id(node):
+    """The tunnel a site on this node must be pointed at."""
+    return NODES.get(node, {}).get("tunnel_id") or CF_TUNNEL_ID
 
 API_KEY = os.environ.get("API_KEY", "")
 
@@ -113,6 +229,9 @@ PUBLIC_STATUS = {
 # Subdomains may be nested (api.site) — dots allowed between labels
 SUBDOMAIN_RE = re.compile(r'^[a-z0-9\-]+(\.[a-z0-9\-]+)*$')
 EXT_PATH_RE  = re.compile(r'^[a-z0-9\-]+$')
+# A registrable domain (two labels or more) and a Cloudflare zone ID.
+DOMAIN_RE    = re.compile(r'^(?!-)[a-z0-9\-]{1,63}(?<!-)(\.(?!-)[a-z0-9\-]{1,63}(?<!-))+$')
+ZONE_ID_RE   = re.compile(r'^[0-9a-f]{32}$')
 UNIT_RE      = re.compile(r'^[A-Za-z0-9@_.\-]+$')
 
 # All reads/writes of config.json go through this lock so background deploy /
@@ -185,12 +304,108 @@ def run_cmd(cmd, cwd=None, name=None):
 def git_cmd(args):
     """Build a sudo git command. If GITHUB_TOKEN is set, transparently
     authenticate any https://github.com/ URL (works for clone AND pull,
-    without ever storing the token in the repo's .git/config)."""
+    without ever storing the token in the repo's .git/config).
+
+    safe.directory=* because every clone is chowned to www-data but pulled
+    by root via sudo — git calls that "dubious ownership" and refuses to pull
+    unless root's gitconfig happens to whitelist the path. Passing it on the
+    command line (a protected scope) makes updates independent of that."""
+    base = "sudo git -c safe.directory=*"
     if GITHUB_TOKEN:
         rewrite = (f"-c url.https://x-access-token:{GITHUB_TOKEN}@github.com/"
                    f".insteadOf=https://github.com/")
-        return f"sudo git {rewrite} {args}"
-    return f"sudo git {args}"
+        return f"{base} {rewrite} {args}"
+    return f"{base} {args}"
+
+def parse_port(raw):
+    """Returns (ok, port_or_None_or_error). Empty means a static site."""
+    if raw in (None, ""):
+        return True, None
+    try:
+        port = int(str(raw).strip())
+    except ValueError:
+        return False, "Port must be a number."
+    if not 1 <= port <= 65535:
+        return False, "Port must be between 1 and 65535."
+    return True, port
+
+def remote_only_error(svc, action):
+    """Extensions, conversions and renames rewrite nginx and files on *this*
+    machine, so they can't be applied to a site that lives on a worker node —
+    doing so used to write a vhost for it on the controller, where the site
+    doesn't exist. Returns an error response, or None if the site is local."""
+    node = svc_node(svc)
+    if is_remote(node):
+        return jsonify({"ok": False, "error":
+            f"{action} isn't supported for sites on node '{node}' yet — only on the controller."})
+    return None
+
+
+# ── Talking to a worker node ──────────────────────────────────────────────────
+def node_api(node, method, path, payload=None, timeout=30):
+    """Call a worker node's agent. Returns (ok, data_or_error_string).
+
+    Every failure mode here is a *soft* one for the caller to report: a node
+    being down must never raise out of a background deploy thread, because
+    that would leave the site wedged in "deploying" with nothing in the log."""
+    info = NODES.get(node)
+    if not info or info.get("local"):
+        return False, f"'{node}' is not a remote node."
+    if not info.get("key"):
+        return False, f"No API key configured for node '{node}' — set NODE_{node.upper()}_KEY."
+    try:
+        r = requests.request(method, f"{info['url']}{path}",
+                             headers={"X-API-Key": info["key"]},
+                             json=payload, timeout=timeout)
+    except requests.RequestException as e:
+        return False, f"Node '{node}' unreachable: {e}"
+    if r.status_code == 401:
+        return False, f"Node '{node}' rejected the API key."
+    try:
+        data = r.json()
+    except ValueError:
+        return False, f"Node '{node}' returned a non-JSON response (HTTP {r.status_code})."
+    if isinstance(data, dict) and data.get("ok") is False:
+        return False, data.get("error", "Unknown error from node.")
+    return True, data
+
+def mirror_log(name, line):
+    """Append a node's log line verbatim.
+
+    It already carries its own timestamp, level and [node] tag, so passing it
+    through log() would stamp it twice. Writing it raw also keeps the [ERROR]
+    and [WARN] markers intact, which is what the Logs panel filters on."""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    with open(f"{LOG_DIR}/{name}.log", "a") as f:
+        f.write(line if line.endswith("\n") else line + "\n")
+
+def await_node(key, node, timeout=900, interval=5):
+    """Follow a node's background deploy/update until it settles.
+
+    The agent's HTTP reply only means "accepted" — it clones in a thread of its
+    own, exactly as the controller does locally. So poll its log and its
+    service record, copying progress across so the dashboard shows the real
+    thing rather than a spinner. Returns True if the site ended up healthy."""
+    seen = 0
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(interval)
+        ok, data = node_api(node, "GET", f"/agent/logs/{key}")
+        if ok:
+            lines = data.get("all", [])
+            for line in lines[seen:]:
+                mirror_log(key, line)
+            seen = len(lines)
+        ok, svcs = node_api(node, "GET", "/agent/services")
+        if not ok:
+            continue
+        status = (svcs.get(key) or {}).get("status")
+        if status in ("online", "error", "paused"):
+            update_service(key, status=status)
+            return status != "error"
+    log(key, f"Timed out waiting for node '{node}' to finish.", "ERROR")
+    update_service(key, status="error")
+    return False
 
 def valid_subdomain(sub):
     return bool(sub) and bool(SUBDOMAIN_RE.match(sub))
@@ -217,28 +432,35 @@ def get_service_or_error(data):
     return subdomain, svc, None
 
 # ── Cloudflare DNS ────────────────────────────────────────────────────────────
-def cf_headers():
+def cf_headers(domain=None):
+    """Auth for a Cloudflare call. `domain` selects that domain's own token when
+    it has one; omitted, it is the account-wide token exactly as before."""
     return {
-        "Authorization": f"Bearer {CF_API_TOKEN}",
+        "Authorization": f"Bearer {domain_token(domain)}",
         "Content-Type": "application/json"
     }
 
-def cf_find_record(zone_id, name):
+def cf_find_record(zone_id, name, domain=None):
     """Return an existing record's id for this hostname, or None."""
     try:
         r = requests.get(f"{CF_API_BASE}/zones/{zone_id}/dns_records",
-                         headers=cf_headers(), params={"name": name}, timeout=10)
+                         headers=cf_headers(domain), params={"name": name}, timeout=10)
         results = r.json().get("result") or []
         return results[0]["id"] if results else None
     except Exception:
         return None
 
-def cf_add_dns(subdomain, domain=None):
-    """Point a hostname at the tunnel.
+def cf_add_dns(subdomain, domain=None, tunnel_id=None):
+    """Point a hostname at a tunnel.
 
     Subdomains CNAME to their apex; the apex itself CNAMEs to the tunnel
     directly (a record can't point at itself). Cloudflare's CNAME flattening
-    makes an apex CNAME legal. Returns (ok, record_id_or_error)."""
+    makes an apex CNAME legal. Returns (ok, record_id_or_error).
+
+    `tunnel_id` names which tunnel. Left None it means the controller's, and
+    every call behaves exactly as it did before worker nodes existed. A site
+    on a worker node passes that node's tunnel, which is the one thing that
+    stops its hostname resolving to the controller instead."""
     domain  = (domain or DOMAIN).lower()
     zone_id = zone_for(domain)
     if not zone_id:
@@ -246,11 +468,20 @@ def cf_add_dns(subdomain, domain=None):
 
     name    = make_fqdn(subdomain, domain)
     is_apex = (name == domain)
+    # The domain's own tunnel outranks the node's: if this zone is in another
+    # account, the node's tunnel is in an account this zone cannot reference.
+    tunnel  = (domain_tunnel(domain) or tunnel_id or CF_TUNNEL_ID or "").strip()
     if is_apex:
-        if not CF_TUNNEL_ID:
-            return False, ("CF_TUNNEL_ID is not set — an apex record must point "
-                           "at <tunnel-id>.cfargotunnel.com. Add it to .env.")
-        content = f"{CF_TUNNEL_ID}.cfargotunnel.com"
+        if not tunnel:
+            return False, ("No tunnel ID for this record — an apex must point "
+                           "at <tunnel-id>.cfargotunnel.com. Set CF_TUNNEL_ID "
+                           "in .env (or NODE_<NAME>_TUNNEL for a worker node).")
+        content = f"{tunnel}.cfargotunnel.com"
+    elif tunnel and tunnel != CF_TUNNEL_ID:
+        # A site on a worker node: CNAME straight at that node's tunnel. The
+        # usual CNAME-to-apex would resolve to the controller's tunnel, and the
+        # request would arrive on a machine where the site does not exist.
+        content = f"{tunnel}.cfargotunnel.com"
     else:
         content = domain
 
@@ -258,7 +489,7 @@ def cf_add_dns(subdomain, domain=None):
     data = {"type": "CNAME", "name": name, "content": content,
             "proxied": True, "ttl": 1}
     try:
-        r = requests.post(url, headers=cf_headers(), json=data, timeout=10)
+        r = requests.post(url, headers=cf_headers(domain), json=data, timeout=10)
         resp = r.json()
         if resp.get("success"):
             return True, resp["result"]["id"]
@@ -266,9 +497,9 @@ def cf_add_dns(subdomain, domain=None):
         # A parked/placeholder record already on this hostname (very common at
         # the apex of a freshly-registered domain) — take it over rather than
         # making the deploy fail.
-        existing = cf_find_record(zone_id, name)
+        existing = cf_find_record(zone_id, name, domain)
         if existing:
-            r2 = requests.put(f"{url}/{existing}", headers=cf_headers(),
+            r2 = requests.put(f"{url}/{existing}", headers=cf_headers(domain),
                               json=data, timeout=10)
             if r2.json().get("success"):
                 return True, existing
@@ -277,15 +508,166 @@ def cf_add_dns(subdomain, domain=None):
         return False, str(e)
 
 def cf_delete_dns(record_id, domain=None):
-    zone_id = zone_for(domain or DOMAIN)
+    domain  = (domain or DOMAIN).lower()
+    zone_id = zone_for(domain)
     if not zone_id:
         return False
     url = f"{CF_API_BASE}/zones/{zone_id}/dns_records/{record_id}"
     try:
-        r = requests.delete(url, headers=cf_headers(), timeout=10)
+        r = requests.delete(url, headers=cf_headers(domain), timeout=10)
         return r.json().get("success", False)
     except:
         return False
+
+# ── Connecting a domain ───────────────────────────────────────────────────────
+# Adding a domain is three separate things, and all three have to hold for a
+# site on it to load:
+#
+#   1. Cloudflare must have the zone, and the API token must be able to see it
+#   2. the tunnel must route <domain> and *.<domain>
+#   3. .env must remember the zone ID so it survives a reboot
+#
+# The one part this can't do for you is the token's Zone Resources — that's an
+# account-level permission, and no zone-scoped token can widen its own scope.
+# So the zone lookup runs first and its failure message names the exact
+# dashboard setting to change.
+
+def valid_new_domain(domain):
+    """A registrable domain: at least two labels, no leading/trailing hyphen."""
+    domain = (domain or "").strip().strip(".").lower()
+    return bool(domain) and len(domain) <= 253 and bool(DOMAIN_RE.match(domain))
+
+def cf_lookup_zone(domain):
+    """Find a domain's Cloudflare zone using the configured token.
+
+    Returns (zone_id, zone_status, error)."""
+    try:
+        r = requests.get(f"{CF_API_BASE}/zones", headers=cf_headers(domain),
+                         params={"name": domain}, timeout=15)
+        resp = r.json()
+    except Exception as e:
+        return None, None, f"Couldn't reach the Cloudflare API: {e}"
+
+    if not resp.get("success"):
+        msgs = "; ".join(str(e.get("message", e))
+                         for e in (resp.get("errors") or [])) or "unknown error"
+        return None, None, f"Cloudflare rejected the request: {msgs}"
+
+    results = resp.get("result") or []
+    if not results:
+        # Two causes, indistinguishable from here, so name both.
+        return None, None, (
+            f"This API token can't see a zone called {domain}. Either the "
+            f"domain hasn't been added to Cloudflare yet, or the token's Zone "
+            f"Resources don't include it — setting them to 'All zones from an "
+            f"account' makes this and every future domain work without "
+            f"touching the token again.")
+    return results[0].get("id"), results[0].get("status"), None
+
+def cf_zone_check(zone_id, domain=None):
+    """Read a zone by ID — used to confirm a hand-entered ID is the right one.
+
+    Returns (zone_name, zone_status, error)."""
+    try:
+        r = requests.get(f"{CF_API_BASE}/zones/{zone_id}",
+                         headers=cf_headers(domain), timeout=15)
+        resp = r.json()
+    except Exception as e:
+        return None, None, f"Couldn't reach the Cloudflare API: {e}"
+    if not resp.get("success"):
+        return None, None, (f"Zone ID {zone_id} isn't readable with this API "
+                            f"token — check the ID, and that the token covers it.")
+    result = resp.get("result") or {}
+    return result.get("name"), result.get("status"), None
+
+def env_set(key, value):
+    """Rewrite one KEY=value line in .env, leaving every other line untouched.
+
+    Written to a temp file beside the original and renamed over it, so an
+    interrupted write can't leave systemd with a truncated EnvironmentFile —
+    that would take the whole dashboard down on the next boot. The original
+    file's mode is carried over because .env holds the Cloudflare token."""
+    try:
+        with open(ENV_FILE) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+
+    replaced = False
+    for i, existing in enumerate(lines):
+        if existing.lstrip().startswith("#"):
+            continue
+        if existing.split("=", 1)[0].strip() == key:
+            lines[i] = f"{key}={value}"
+            replaced = True
+            break
+    if not replaced:
+        lines.append(f"{key}={value}")
+
+    mode = os.stat(ENV_FILE).st_mode & 0o777 if os.path.exists(ENV_FILE) else 0o600
+    tmp  = f"{ENV_FILE}.tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, mode)
+    os.replace(tmp, ENV_FILE)
+
+def tunnel_hostnames():
+    """Hostnames the cloudflared ingress currently routes, lowercased."""
+    try:
+        with open(TUNNEL_CONFIG) as f:
+            body = f.read()
+    except Exception:
+        return set()
+    return {h.strip().strip('"').strip("'").lower()
+            for h in re.findall(r'^\s*-?\s*hostname:\s*(\S+)\s*$', body, re.M)}
+
+def domain_in_tunnel(domain):
+    """True only once BOTH the apex and the wildcard are routed — a domain
+    with just the apex silently 404s every subdomain deployed under it."""
+    routed = tunnel_hostnames()
+    return domain in routed and f"*.{domain}" in routed
+
+def tunnel_add_domain(domain, name=None):
+    """Route <domain> and *.<domain> through the tunnel, then restart it.
+
+    The helper runs as root, keeps a timestamped backup, and refuses to
+    install a config cloudflared can't parse — a broken ingress list takes
+    every site on the Pi offline, not just the new one. `domain` has already
+    been through DOMAIN_RE (letters, digits, hyphens and dots only), so it is
+    safe to interpolate into the command."""
+    if domain_in_tunnel(domain):
+        return True, "Tunnel already routes this domain."
+    if not os.path.exists(INGRESS_HELPER):
+        return False, (f"{INGRESS_HELPER} is not installed — add it and its "
+                       f"sudoers rule, or add the ingress entries by hand.")
+    ok, out = run_cmd(f"sudo {INGRESS_HELPER} add {domain}", name=name)
+    if not ok:
+        return False, (out.strip().splitlines() or ["Ingress helper failed."])[-1]
+    ok, _ = restart_cf_tunnel(name)
+    if not ok:
+        return False, "Ingress updated, but restarting cloudflared failed."
+    return True, "Tunnel ingress updated and cloudflared restarted."
+
+def inspect_domain(domain, zone_id=None):
+    """Everything the UI needs to tell you whether a domain is ready.
+
+    Read-only — this changes nothing, so the Add-domain dialog can call it as
+    you type without side effects."""
+    info = {"domain": domain, "zone_id": zone_id, "zone_status": None,
+            "configured": domain in DOMAINS, "in_tunnel": domain_in_tunnel(domain),
+            "error": None}
+    if zone_id:
+        name, status, err = cf_zone_check(zone_id, domain)
+        if err:
+            info["error"] = err
+        elif (name or "").lower() != domain:
+            info["error"] = f"Zone {zone_id} belongs to {name}, not {domain}."
+        else:
+            info["zone_status"] = status
+    else:
+        found, status, err = cf_lookup_zone(domain)
+        info["zone_id"], info["zone_status"], info["error"] = found, status, err
+    return info
 
 # ── Nginx config generator ────────────────────────────────────────────────────
 def ext_web_root(subdomain, path):
@@ -424,15 +806,19 @@ def write_site_config(key, svc):
     )
 
 PAUSED_HTML = (
-    "<!doctype html><html><head><meta charset=utf-8>"
+    "<!doctype html><html lang=en><head><meta charset=utf-8>"
     "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
-    "<title>Site paused</title>"
-    "<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
-    "background:#0b0e14;color:#e2e8f0;font-family:system-ui,sans-serif;text-align:center}"
-    "h1{font-size:26px;margin:0 0 10px}p{color:#64748b;margin:0}"
-    ".dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#eab308;margin-right:8px}"
-    "</style></head><body><div><h1><span class=dot></span>Site paused</h1>"
-    "<p>This site is temporarily paused to save resources. Check back soon.</p></div></body></html>"
+    "<meta name=color-scheme content=\"light dark\"><title>Paused</title>"
+    "<style>:root{--bg:#f5f5f7;--fg:#1d1d1f;--mute:#6e6e73}"
+    "@media (prefers-color-scheme:dark){:root{--bg:#000;--fg:#f5f5f7;--mute:#98989d}}"
+    "body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);"
+    "font:17px/1.47 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;text-align:center;padding:24px}"
+    "i{display:block;width:12px;height:12px;border-radius:50%;background:#ff9f0a;margin:0 auto 20px;"
+    "box-shadow:0 0 0 6px rgba(255,159,10,.18)}"
+    "h1{font-size:32px;line-height:1.1;letter-spacing:-.02em;font-weight:700;margin:0 0 8px}"
+    "p{color:var(--mute);margin:0;max-width:28em}"
+    "</style></head><body><main><i></i><h1>This site is paused</h1>"
+    "<p>It has been switched off for now to save resources. Check back soon.</p></main></body></html>"
 )
 
 def write_paused_config(key, fqdn):
@@ -528,33 +914,54 @@ def index():
         domain=DOMAIN,
         domains=sorted(DOMAINS),
         fqdns=fqdns,
+        nodes=sorted(NODES, key=lambda n: (n != LOCAL_NODE, n)),
+        node_info=public_nodes(),
+        local_node=LOCAL_NODE,
     )
+
+def public_nodes():
+    """Node metadata that's safe to hand to the browser — never the key."""
+    return [{"name": n, "label": NODES[n]["label"], "local": NODES[n]["local"],
+             "dashboard": NODES[n]["dashboard"]}
+            for n in sorted(NODES, key=lambda n: (n != LOCAL_NODE, n))]
+
+def safe_next(target):
+    """Only same-site absolute paths — '/deploy/' yes, '//evil.com' or a full URL
+    no — so ?next= can't be used to bounce a fresh login somewhere else."""
+    target = (target or "").strip()
+    if target.startswith("/") and not target.startswith("//") and "\\" not in target:
+        return target
+    return None
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     cfg = load_config()
     error = None
+    # nginx sends visitors of a mounted page here with ?next=/that/path/ so they land back there
+    nxt = safe_next(request.values.get("next"))
 
     if request.method == "POST":
         pw = request.form.get("password", "").encode()
         stored = cfg.get("password_hash")
 
         if not stored:
-            # First-time setup: set the password
-            hashed = bcrypt.hashpw(pw, bcrypt.gensalt()).decode()
-            cfg["password_hash"] = hashed
-            save_config(cfg)
+            if len(pw) < 12:
+                error = "Use at least 12 characters."
+            else:
+                # First-time setup: set the password
+                hashed = bcrypt.hashpw(pw, bcrypt.gensalt()).decode()
+                cfg["password_hash"] = hashed
+                save_config(cfg)
+                session["logged_in"] = True
+                return redirect(nxt or url_for("index"))
+        elif bcrypt.checkpw(pw, stored.encode()):
             session["logged_in"] = True
-            return redirect(url_for("index"))
-
-        if bcrypt.checkpw(pw, stored.encode()):
-            session["logged_in"] = True
-            return redirect(url_for("index"))
+            return redirect(nxt or url_for("index"))
         else:
             error = "Incorrect password."
 
     first_time = not cfg.get("password_hash")
-    return render_template("login.html", error=error, first_time=first_time)
+    return render_template("login.html", error=error, first_time=first_time, next=nxt)
 
 @app.route("/logout")
 def logout():
@@ -569,11 +976,24 @@ def deploy():
     repo_url  = data.get("repo_url", "").strip()
     subdomain = data.get("subdomain", "").strip().strip(".").lower()
     domain    = (data.get("domain") or DOMAIN).strip().lower()
-    port      = data.get("port")  # optional, for dynamic apps
-    project   = (data.get("project") or "").strip()
+    project   = (data.get("project") or "").strip()[:60]
+    node      = (data.get("node") or LOCAL_NODE).strip().lower()
+    unit      = (data.get("service_name") or "").strip()
 
     if not repo_url:
         return jsonify({"ok": False, "error": "Repo URL is required."})
+
+    ok, port = parse_port(data.get("port"))  # optional, for dynamic apps
+    if not ok:
+        return jsonify({"ok": False, "error": port})
+
+    # Without the unit name, Pause only swaps the nginx page and the app keeps
+    # running — so take it at deploy time rather than hoping it gets set later.
+    if unit and not valid_unit(unit):
+        return jsonify({"ok": False, "error": "Invalid systemd service name."})
+
+    if not valid_node(node):
+        return jsonify({"ok": False, "error": f"Unknown node '{node}'. Configured: {', '.join(sorted(NODES))}."})
 
     if not valid_domain(domain):
         return jsonify({"ok": False, "error": f"Unknown domain '{domain}'. Configured: {', '.join(sorted(DOMAINS))}."})
@@ -590,46 +1010,68 @@ def deploy():
 
     def do_deploy():
         web_root = f"{WWW_ROOT}/{key}"
-        log(key, f"Starting deploy of {repo_url} → {fqdn}")
+        where = "" if node == LOCAL_NODE else f" on node '{node}'"
+        log(key, f"Starting deploy of {repo_url} → {fqdn}{where}")
 
-        # Clone repo (git_cmd adds GitHub auth for private repos if configured)
-        ok, out = run_cmd(git_cmd(f"clone {repo_url} {web_root}"), name=key)
-        if not ok:
-            log(key, "Git clone failed — aborting.", "ERROR")
-            update_service(key, status="error")
-            return
+        if node == LOCAL_NODE:
+            # Clone repo (git_cmd adds GitHub auth for private repos if configured)
+            ok, out = run_cmd(git_cmd(f"clone {repo_url} {web_root}"), name=key)
+            if not ok:
+                log(key, "Git clone failed — aborting.", "ERROR")
+                update_service(key, status="error")
+                return
 
-        # Set permissions
-        run_cmd(f"sudo chown -R www-data:www-data {web_root}", name=key)
+            # Set permissions
+            run_cmd(f"sudo chown -R www-data:www-data {web_root}", name=key)
 
-        # Write Nginx config
-        try:
-            write_nginx_config(key, fqdn, web_root, port=int(port) if port else None)
-            log(key, "Nginx config written.")
-        except Exception as e:
-            log(key, f"Failed to write Nginx config: {e}", "ERROR")
-            update_service(key, status="error")
-            return
+            # Write Nginx config
+            try:
+                write_nginx_config(key, fqdn, web_root, port=int(port) if port else None)
+                log(key, "Nginx config written.")
+            except Exception as e:
+                log(key, f"Failed to write Nginx config: {e}", "ERROR")
+                update_service(key, status="error")
+                return
 
-        # Reload Nginx
-        ok, _ = reload_nginx(key)
-        if not ok:
-            log(key, "Nginx reload failed.", "ERROR")
-            update_service(key, status="error")
-            return
-        log(key, "Nginx reloaded.")
+            # Reload Nginx
+            ok, _ = reload_nginx(key)
+            if not ok:
+                log(key, "Nginx reload failed.", "ERROR")
+                update_service(key, status="error")
+                return
+            log(key, "Nginx reloaded.")
+        else:
+            # The node does the clone, the vhost and the reload; we follow its
+            # log so the dashboard shows the same detail as a local deploy.
+            ok, res = node_api(node, "POST", "/agent/deploy", {
+                "key": key, "fqdn": fqdn, "repo_url": repo_url, "port": port,
+                "service_name": unit,
+            })
+            if not ok:
+                log(key, f"Node '{node}' refused the deploy: {res}", "ERROR")
+                update_service(key, status="error")
+                return
+            if not await_node(key, node):
+                log(key, f"Deploy failed on node '{node}' — see the lines above.", "ERROR")
+                return
 
-        # Cloudflare DNS
-        ok, result = cf_add_dns(subdomain, domain)
+        # Cloudflare DNS — always the controller's job, but pointed at whichever
+        # tunnel actually fronts this site.
+        ok, result = cf_add_dns(subdomain, domain, tunnel_id=node_tunnel_id(node))
         if ok:
             update_service(key, cf_record_id=result)
             log(key, f"Cloudflare DNS record created (ID: {result}).")
         else:
             log(key, f"Cloudflare DNS failed: {result} — add manually if needed.", "WARN")
 
-        # Restart Cloudflare tunnel
-        ok, _ = restart_cf_tunnel(key)
-        log(key, "Cloudflare tunnel restarted." if ok else "Tunnel restart failed — may need manual restart.", "INFO" if ok else "WARN")
+        if node == LOCAL_NODE:
+            # Restart Cloudflare tunnel
+            ok, _ = restart_cf_tunnel(key)
+            log(key, "Cloudflare tunnel restarted." if ok else "Tunnel restart failed — may need manual restart.", "INFO" if ok else "WARN")
+        else:
+            # A worker's tunnel routes its domains by wildcard, so a new
+            # subdomain needs no ingress change and no restart over there.
+            log(key, f"Node '{node}' fronts this site with its own tunnel — no restart needed.")
 
         update_service(key, status="online", deployed_at=datetime.now().isoformat())
         log(key, f"Deploy complete → https://{fqdn}")
@@ -646,8 +1088,9 @@ def deploy():
             "fqdn": fqdn,
             "web_root": f"{WWW_ROOT}/{key}",
             "port": port,
+            "node": node,
             "project": project,
-            "service_name": "",
+            "service_name": unit,
             "extensions": {},
             "status": "deploying",
             "cf_record_id": None,
@@ -658,7 +1101,8 @@ def deploy():
     thread = threading.Thread(target=do_deploy, daemon=True)
     thread.start()
 
-    return jsonify({"ok": True, "message": f"Deploying {fqdn} — check logs for progress."})
+    where = "" if node == LOCAL_NODE else f" on {node}"
+    return jsonify({"ok": True, "message": f"Deploying {fqdn}{where} — check logs for progress."})
 
 # ── Update ────────────────────────────────────────────────────────────────────
 @app.route("/api/update", methods=["POST"])
@@ -670,10 +1114,30 @@ def update():
     if svc.get("redirect_to"):
         return jsonify({"ok": False, "error": "Redirects have no repo to update — edit the redirect instead."})
 
+    node = svc_node(svc)
+    if svc.get("status") in ("deploying", "updating"):
+        return jsonify({"ok": False, "error": f"{subdomain} is busy ({svc['status']}) — wait for it to finish."})
+    # An update pulls new code but must not un-pause a site: the nginx config
+    # stays on the paused page, so marking it "online" would be a lie.
+    was_paused = svc.get("status") == "paused"
+    final = "paused" if was_paused else "online"
+
     def do_update():
         web_root = svc["web_root"]
         log(subdomain, f"Starting update for {svc_fqdn(subdomain, svc)}")
         update_service(subdomain, status="updating")
+
+        if is_remote(node):
+            ok, res = node_api(node, "POST", "/agent/update", {"key": subdomain})
+            if not ok:
+                log(subdomain, f"Node '{node}' refused the update: {res}", "ERROR")
+                update_service(subdomain, status="error")
+                return
+            if await_node(subdomain, node):
+                update_service(subdomain, status=final,
+                               updated_at=datetime.now().isoformat())
+                log(subdomain, "Update complete.")
+            return
 
         ok, out = run_cmd(git_cmd("pull"), cwd=web_root, name=subdomain)
         if not ok:
@@ -682,15 +1146,21 @@ def update():
             return
 
         run_cmd(f"sudo chown -R www-data:www-data {web_root}", name=subdomain)
+
+        # A dynamic app only runs the new code once its process restarts.
+        unit = svc.get("service_name") or ""
+        if unit and not was_paused:
+            systemctl_unit("restart", unit, subdomain)
+
         ok, _ = reload_nginx(subdomain)
         log(subdomain, "Nginx reloaded." if ok else "Nginx reload failed.", "INFO" if ok else "ERROR")
 
-        update_service(subdomain, status="online", updated_at=datetime.now().isoformat())
-        log(subdomain, "Update complete.")
+        update_service(subdomain, status=final, updated_at=datetime.now().isoformat())
+        log(subdomain, "Update complete." + (" Site is still paused." if was_paused else ""))
 
     thread = threading.Thread(target=do_update, daemon=True)
     thread.start()
-    return jsonify({"ok": True, "message": f"Updating {subdomain} — check logs."})
+    return jsonify({"ok": True, "message": f"Updating {svc_fqdn(subdomain, svc)}…"})
 
 # ── Delete ────────────────────────────────────────────────────────────────────
 @app.route("/api/delete", methods=["POST"])
@@ -703,8 +1173,30 @@ def delete():
     web_root  = svc.get("web_root", f"{WWW_ROOT}/{subdomain}")
     record_id = svc.get("cf_record_id")
     unit      = svc.get("service_name") or ""
+    node      = svc_node(svc)
 
     log(subdomain, f"Removing {svc_fqdn(subdomain, svc)}")
+
+    if is_remote(node):
+        # The node owns the files, the vhost and the unit; the controller still
+        # owns the DNS record and config.json, so both halves run here.
+        ok, res = node_api(node, "POST", "/agent/delete", {"key": subdomain})
+        if not ok:
+            log(subdomain, f"Node '{node}' could not remove the site: {res}", "ERROR")
+            return jsonify({"ok": False, "error": f"Node '{node}' could not remove {subdomain}: {res}"})
+        log(subdomain, f"Removed from node '{node}'.")
+
+        if record_id:
+            if cf_delete_dns(record_id, svc_domain(svc)):
+                log(subdomain, "Cloudflare DNS record removed.")
+            else:
+                log(subdomain, "Failed to remove Cloudflare DNS record — delete it manually.", "WARN")
+
+        with config_lock:
+            cfg = load_config()
+            cfg.get("services", {}).pop(subdomain, None)
+            save_config(cfg)
+        return jsonify({"ok": True, "message": f"{subdomain} removed from {node}."})
 
     # Stop the site's own systemd service so its process doesn't linger
     if unit:
@@ -760,6 +1252,16 @@ def pause():
 
     log(subdomain, f"Pausing {svc_fqdn(subdomain, svc)}")
 
+    node = svc_node(svc)
+    if is_remote(node):
+        ok, res = node_api(node, "POST", "/agent/pause", {"key": subdomain})
+        if not ok:
+            log(subdomain, f"Node '{node}' could not pause the site: {res}", "ERROR")
+            return jsonify({"ok": False, "error": res})
+        update_service(subdomain, status="paused", paused_at=datetime.now().isoformat())
+        log(subdomain, "Site paused — visitors now see the paused page.")
+        return jsonify({"ok": True, "message": f"{subdomain} paused on {node}."})
+
     # Stop the app process first (frees RAM/CPU) — extensions' apps too
     unit = svc.get("service_name") or ""
     if unit:
@@ -802,6 +1304,16 @@ def resume():
         return jsonify({"ok": False, "error": f"{subdomain} is not paused."})
 
     log(subdomain, f"Resuming {svc_fqdn(subdomain, svc)}")
+
+    node = svc_node(svc)
+    if is_remote(node):
+        ok, res = node_api(node, "POST", "/agent/resume", {"key": subdomain})
+        if not ok:
+            log(subdomain, f"Node '{node}' could not resume the site: {res}", "ERROR")
+            return jsonify({"ok": False, "error": res})
+        update_service(subdomain, status="online", paused_at=None)
+        log(subdomain, "Site resumed.")
+        return jsonify({"ok": True, "message": f"{subdomain} resumed on {node}."})
 
     # Restore the real nginx config (including any path extensions)
     try:
@@ -851,9 +1363,19 @@ def edit():
         return jsonify({"ok": False, "error": "Nothing to update."})
 
     update_service(subdomain, **fields)
+
+    # The node starts and stops the site's systemd unit, so it needs the unit
+    # name too — otherwise Pause on a remote site would leave the app running.
+    node = svc_node(svc)
+    if is_remote(node) and "service_name" in fields:
+        ok, res = node_api(node, "POST", "/agent/edit",
+                           {"key": subdomain, "service_name": fields["service_name"]})
+        if not ok:
+            return jsonify({"ok": True,
+                            "message": f"{subdomain} updated here, but node '{node}' did not accept it: {res}"})
     return jsonify({"ok": True, "message": f"{subdomain} updated."})
 
-# ── Path extensions (site.example.com/<path>) ────────────────────────────────
+# ── Path extensions (site.example.com/<path>) ───────────────────────────────
 def regen_config_with_rollback(subdomain, svc):
     """Rewrite a site's nginx config; if nginx rejects it, restore the old one.
     Returns True on success."""
@@ -878,12 +1400,17 @@ def ext_add():
     subdomain, svc, err = get_service_or_error(data)
     if err:
         return err
+    guard = remote_only_error(svc, "Path extensions")
+    if guard:
+        return guard
     if svc.get("status") == "paused":
         return jsonify({"ok": False, "error": "Resume the site before editing its extensions."})
 
     path     = (data.get("path") or "").strip().strip("/").lower()
     repo_url = (data.get("repo_url") or "").strip()
-    port     = data.get("port")
+    ok, port = parse_port(data.get("port"))
+    if not ok:
+        return jsonify({"ok": False, "error": port})
     if not valid_ext_path(path):
         return jsonify({"ok": False, "error": "Path can only contain lowercase letters, numbers, and hyphens."})
     if not repo_url and not port:
@@ -935,6 +1462,9 @@ def ext_update():
     subdomain, svc, err = get_service_or_error(data)
     if err:
         return err
+    guard = remote_only_error(svc, "Path extensions")
+    if guard:
+        return guard
     path = (data.get("path") or "").strip().strip("/").lower()
     ext = (svc.get("extensions") or {}).get(path)
     if not ext:
@@ -960,6 +1490,9 @@ def ext_remove():
     subdomain, svc, err = get_service_or_error(data)
     if err:
         return err
+    guard = remote_only_error(svc, "Path extensions")
+    if guard:
+        return guard
     if svc.get("status") == "paused":
         return jsonify({"ok": False, "error": "Resume the site before editing its extensions."})
     path = (data.get("path") or "").strip().strip("/").lower()
@@ -1087,6 +1620,9 @@ def convert_to_extension():
     subdomain, svc, err = get_service_or_error(data)
     if err:
         return err
+    guard = remote_only_error(svc, "Converting a site")
+    if guard:
+        return guard
     parent_name = (data.get("parent") or "").strip().lower()
     path = (data.get("path") or "").strip().strip("/").lower()
 
@@ -1111,6 +1647,9 @@ def convert_to_extension():
             return jsonify({"ok": False, "error": "Parent site not found."})
         if parent.get("status") == "paused":
             return jsonify({"ok": False, "error": "Resume the parent site before converting."})
+        guard = remote_only_error(parent, "Nesting under a site on another node")
+        if guard:
+            return guard
         if path in (parent.get("extensions") or {}):
             return jsonify({"ok": False, "error": f"/{path} already exists on {parent_name}."})
 
@@ -1156,6 +1695,9 @@ def detach_extension():
     subdomain, svc, err = get_service_or_error(data)   # subdomain = the parent
     if err:
         return err
+    guard = remote_only_error(svc, "Detaching an extension")
+    if guard:
+        return guard
     path = (data.get("path") or "").strip().strip("/").lower()
     new  = (data.get("new_subdomain") or "").strip().strip(".").lower()
 
@@ -1228,6 +1770,9 @@ def convert_to_subdomain():
     subdomain, svc, err = get_service_or_error(data)
     if err:
         return err
+    guard = remote_only_error(svc, "Renaming or moving a site")
+    if guard:
+        return guard
     new = (data.get("new_subdomain") or "").strip().strip(".").lower()
     # Omitting "domain" keeps the site where it is; passing another configured
     # domain moves it across (files stay put — only nginx + DNS change).
@@ -1302,12 +1847,35 @@ def convert_to_subdomain():
     return jsonify({"ok": True, "message": f"{old_fqdn} is now {new_fqdn}"})
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
+def _log_ts(line):
+    """Sort key for a log line: its leading [YYYY-MM-DD HH:MM:SS] stamp.
+
+    Lines without one sort first rather than blowing up — a log is a debugging
+    aid, and a malformed line must not take the whole panel down."""
+    return line[1:20] if line.startswith("[") else ""
+
 @app.route("/api/logs/<subdomain>")
 @login_required
 def logs(subdomain):
     if not valid_subdomain(subdomain):
         return jsonify({"all": [], "errors": []})
     lines = read_log(subdomain)
+
+    # A site on a worker node logs in two places: here (deploy start, DNS,
+    # tunnel) and on the node (clone, nginx). await_node mirrors the node's
+    # lines across verbatim, so merging on the exact line de-duplicates the
+    # overlap and still picks up anything logged there since.
+    svc  = load_config().get("services", {}).get(subdomain) or {}
+    node = svc_node(svc)
+    if is_remote(node):
+        ok, data = node_api(node, "GET", f"/agent/logs/{subdomain}", timeout=8)
+        if ok:
+            merged = dict.fromkeys(l if l.endswith("\n") else l + "\n"
+                                   for l in lines + data.get("all", []))
+            lines = sorted(merged, key=_log_ts)[-400:]
+        else:
+            lines = lines + [f"[WARN] Could not reach node '{node}': {data}\n"]
+
     errors = [l for l in lines if "[ERROR]" in l or "[WARN]" in l]
     return jsonify({"all": lines, "errors": errors})
 
@@ -1321,11 +1889,12 @@ def status():
     for key, svc in services.items():
         svc.setdefault("domain", svc_domain(svc))
         svc["fqdn"] = svc_fqdn(key, svc)
+        svc["node"] = svc_node(svc)
     return jsonify(services)
 
 @app.route("/api/public/status")
 def public_status():
-    """Unauthenticated status feed for a public status page.
+    """Unauthenticated status feed for an external status page.
 
     Deliberately narrow: only allowlisted sites, and only name/url/status —
     never repo URLs, ports, web roots, systemd unit names or record IDs.
@@ -1358,6 +1927,51 @@ def public_status():
     resp.headers["Cache-Control"] = "public, max-age=30"
     return resp
 
+@app.route("/api/authcheck")
+@login_required
+def authcheck():
+    """Session probe for nginx's auth_request, which guards the other Pis'
+    dashboards at deploy.example.com/<node>/ so one login covers the fleet.
+
+    It has to be under /api/ : login_required answers /api/* with a 401, and
+    everything else with a 302 to the login page — and auth_request reads a
+    302 as success, which would leave those dashboards wide open."""
+    return "", 204
+
+@app.route("/api/nodes")
+@login_required
+def nodes():
+    """Every machine this ProxDeploy can deploy to, and whether it is up.
+
+    Each remote node is contacted with a short timeout — the dashboard polls
+    this, and one sleeping Pi must not stall the whole page."""
+    cfg = load_config().get("services", {})
+    counts = {}
+    for key, svc in cfg.items():
+        counts[svc_node(svc)] = counts.get(svc_node(svc), 0) + 1
+
+    out = []
+    for name in sorted(NODES, key=lambda n: (n != LOCAL_NODE, n)):
+        info = NODES[name]
+        row = {"name": name, "label": info["label"], "dashboard": info["dashboard"],
+               "local": info["local"], "url": info["url"],
+               "sites": counts.get(name, 0), "tunnel_id": info["tunnel_id"],
+               "online": None, "version": None, "sysinfo": None, "error": None}
+        if info["local"]:
+            row["online"] = True
+            row["version"] = "controller"
+        else:
+            ok, data = node_api(name, "GET", "/agent/ping", timeout=5)
+            if ok:
+                row["online"], row["version"] = True, data.get("version")
+                ok2, sysinfo_data = node_api(name, "GET", "/agent/sysinfo", timeout=5)
+                if ok2:
+                    row["sysinfo"] = sysinfo_data
+            else:
+                row["online"], row["error"] = False, data
+        out.append(row)
+    return jsonify({"default": LOCAL_NODE, "nodes": out})
+
 @app.route("/api/domains")
 @login_required
 def domains():
@@ -1367,9 +1981,105 @@ def domains():
         "domains": [
             {"name": name,
              "zone_id": bool(zone_for(name)),
-             "apex_ready": bool(CF_TUNNEL_ID)}
+             "apex_ready": bool(CF_TUNNEL_ID),
+             "in_tunnel": domain_in_tunnel(name)}
             for name in sorted(DOMAINS)
         ],
+    })
+
+@app.route("/api/domains/check", methods=["POST"])
+@login_required
+def domains_check():
+    """Dry run for the Add-domain dialog. Changes nothing, so it's safe to
+    call while the field is still being typed into."""
+    data    = request.json or {}
+    domain  = (data.get("domain") or "").strip().strip(".").lower()
+    zone_id = (data.get("zone_id") or "").strip().lower() or None
+
+    if not valid_new_domain(domain):
+        return jsonify({"ok": False, "error": "That doesn't look like a domain name."})
+    if zone_id and not ZONE_ID_RE.match(zone_id):
+        return jsonify({"ok": False, "error": "A Cloudflare zone ID is 32 hex characters."})
+
+    return jsonify({"ok": True, **inspect_domain(domain, zone_id)})
+
+@app.route("/api/domains/add", methods=["POST"])
+@login_required
+def domains_add():
+    """Connect a new domain end to end.
+
+    Ordering is deliberate. The zone check is the only hard prerequisite —
+    without a readable zone, nothing about the domain can work — so it fails
+    the whole request. The tunnel edit is a *soft* failure that still leaves
+    the domain configured, matching how deploys treat a failed DNS call: get
+    as far as you can, then say plainly what's left to do by hand. A domain
+    that's configured but unrouted deploys nothing; one that's routed but
+    unconfigured would answer for a domain ProxDeploy doesn't know it owns.
+
+    Nothing here restarts ProxDeploy. DOMAINS is updated in memory as well as
+    in .env, so the new domain is usable immediately and still there after a
+    reboot — restarting mid-request would kill the response and, worse, any
+    deploy running in a background thread."""
+    data    = request.json or {}
+    domain  = (data.get("domain") or "").strip().strip(".").lower()
+    zone_id = (data.get("zone_id") or "").strip().lower() or None
+
+    if not valid_new_domain(domain):
+        return jsonify({"ok": False, "error": "That doesn't look like a domain name."})
+    if zone_id and not ZONE_ID_RE.match(zone_id):
+        return jsonify({"ok": False, "error": "A Cloudflare zone ID is 32 hex characters."})
+    if domain in DOMAINS:
+        return jsonify({"ok": False, "error": f"{domain} is already connected."})
+
+    # 1. The zone, and a token that can actually see it.
+    if zone_id:
+        name, status, err = cf_zone_check(zone_id, domain)
+        if err:
+            return jsonify({"ok": False, "error": err})
+        if (name or "").lower() != domain:
+            return jsonify({"ok": False,
+                            "error": f"Zone {zone_id} belongs to {name}, not {domain}."})
+    else:
+        zone_id, status, err = cf_lookup_zone(domain)
+        if err:
+            return jsonify({"ok": False, "error": err})
+
+    log("_domains", f"Connecting {domain} (zone {zone_id}, status {status})")
+
+    warnings = []
+    if status and status != "active":
+        # Cloudflare says the nameservers haven't finished moving. Everything
+        # below still works; the domain just won't resolve until they do.
+        warnings.append(
+            f"Cloudflare reports this zone as '{status}' — point the domain's "
+            f"nameservers at Cloudflare and it'll go live once they propagate.")
+
+    # 2. Persist, then take effect immediately without a restart.
+    pairs = [f"{d}:{z}" for d, z in sorted(DOMAINS.items())] + [f"{domain}:{zone_id}"]
+    try:
+        env_set("DOMAINS", ",".join(pairs))
+    except Exception as e:
+        log("_domains", f"Could not write .env: {e}", "ERROR")
+        return jsonify({"ok": False, "error": f"Couldn't write .env: {e}"})
+    DOMAINS[domain] = zone_id
+
+    # 3. Route it through the tunnel — soft failure, see the docstring.
+    tunnel_ok, tunnel_msg = tunnel_add_domain(domain, name="_domains")
+    if not tunnel_ok:
+        warnings.append(
+            f"{tunnel_msg} Until the tunnel routes {domain} and *.{domain}, "
+            f"sites deployed there will 404.")
+    log("_domains", f"{domain} connected. Tunnel: {tunnel_msg}",
+        "INFO" if tunnel_ok else "WARN")
+
+    return jsonify({
+        "ok": True,
+        "domain": domain,
+        "zone_id": zone_id,
+        "zone_status": status,
+        "in_tunnel": tunnel_ok,
+        "warnings": warnings,
+        "message": f"{domain} is connected — it's now in the domain picker.",
     })
 
 # ── Per-site resources ────────────────────────────────────────────────────────
@@ -1427,7 +2137,25 @@ def unit_stats(unit):
 def resources():
     cfg = load_config()
     out = {}
+
+    # One round trip per remote node rather than one per site on it.
+    remote = {}
     for name, svc in cfg.get("services", {}).items():
+        node = svc_node(svc)
+        if is_remote(node) and node not in remote:
+            ok, data = node_api(node, "GET", "/agent/resources", timeout=10)
+            remote[node] = data if ok else {}
+
+    for name, svc in cfg.get("services", {}).items():
+        node = svc_node(svc)
+        if is_remote(node):
+            info = remote.get(node, {}).get(name) or {
+                "disk_mb": None, "cpu": None, "ram_mb": None,
+                "uptime_s": None, "unit_active": None,
+            }
+            out[name] = info
+            continue
+
         info = {
             "disk_mb": disk_usage_mb(svc.get("web_root")),
             "cpu": None, "ram_mb": None, "uptime_s": None, "unit_active": None,
@@ -1487,6 +2215,15 @@ def restart_service():
 
     log(subdomain, "Manual restart requested.")
 
+    node = svc_node(svc)
+    if is_remote(node):
+        ok, res = node_api(node, "POST", "/agent/restart", {"key": subdomain})
+        if not ok:
+            log(subdomain, f"Node '{node}' could not restart the site: {res}", "ERROR")
+            return jsonify({"ok": False, "error": res})
+        log(subdomain, "Restart complete.")
+        return jsonify({"ok": True, "message": f"{subdomain} restarted on {node}."})
+
     # If a systemd service name is registered, restart it first
     svc_name = svc.get("service_name", "")
     if svc_name:
@@ -1505,4 +2242,7 @@ if __name__ == "__main__":
     os.makedirs(LOG_DIR, exist_ok=True)
     os.makedirs(SERVICES_DIR, exist_ok=True)
     cleanup_stale_statuses()
-    app.run(host="0.0.0.0", port=2096, debug=False)
+    # Loopback by default: cloudflared and nginx both reach the dashboard on
+    # localhost, and nothing else on the LAN needs to. setup.sh writes PORT.
+    app.run(host=os.environ.get("BIND", "127.0.0.1"),
+            port=int(os.environ.get("PORT", "2096")), debug=False)

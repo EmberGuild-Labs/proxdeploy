@@ -4,9 +4,11 @@
 #
 #     ./setup.sh
 #
-# Asks for your domains, Cloudflare token, and GitHub token, then does the rest:
-# virtualenv, .env, sudoers rule, systemd service, tunnel ingress, and DNS for
-# the dashboard itself.
+# Asks for your domains, Cloudflare token, GitHub token and a dashboard
+# password, then does the rest: virtualenv, .env, sudoers rule, systemd
+# service, tunnel ingress, and DNS for the dashboard itself.
+#
+#     ./setup.sh --password    change the dashboard password later
 #
 # Safe to re-run. Everything it touches is backed up first, and it never
 # overwrites an existing config without asking.
@@ -83,14 +85,63 @@ cf_api() { # cf_api <method> <path> [body]
   fi
 }
 
-case "${1:-}" in
-  -h|--help)
-    sed -n '3,12p' "$0" | sed 's/^# \?//'
-    exit 0 ;;
-esac
+install_requirements() {
+  "$APP_DIR/venv/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1
+  "$APP_DIR/venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt" \
+    || die "pip install failed. Run it by hand to see why:
+  $APP_DIR/venv/bin/pip install -r requirements.txt"
+}
+
+# Sets the dashboard password now, at install time. Left unset, the first
+# person to load the login page would get to choose it — and the dashboard is
+# on the public internet as soon as the tunnel routes it.
+set_password() {
+  local pw pw2 have
+  have="$("$APP_DIR/venv/bin/python" -c '
+import json
+try: print("yes" if json.load(open("config.json")).get("password_hash") else "")
+except Exception: print("")' 2>/dev/null)"
+  if [ -n "$have" ] && ! confirm "A dashboard password is already set. Change it?" n; then
+    info "Kept the existing password"; return 0
+  fi
+  printf '  Anyone with this password can run code on this machine, so make it\n'
+  printf '  long. At least 12 characters.\n\n'
+  while :; do
+    pw="$(ask_secret 'New dashboard password')"
+    [ ${#pw} -lt 12 ] && { warn "Too short — use at least 12 characters."; continue; }
+    pw2="$(ask_secret 'Type it again')"
+    [ "$pw" = "$pw2" ] && break
+    warn "Those didn't match. Try again."
+  done
+  # Password goes in on stdin, never argv, so it can't show up in `ps`.
+  printf '%s' "$pw" | "$APP_DIR/venv/bin/python" -c '
+import bcrypt, json, os, sys
+pw = sys.stdin.buffer.read()
+try: cfg = json.load(open("config.json"))
+except FileNotFoundError: cfg = {"password_hash": None, "services": {}}
+cfg["password_hash"] = bcrypt.hashpw(pw, bcrypt.gensalt()).decode()
+old = os.umask(0o077)
+with open("config.json.tmp", "w") as f: json.dump(cfg, f, indent=2)
+os.umask(old)
+os.replace("config.json.tmp", "config.json")' || die "Could not write the password to config.json."
+  unset pw pw2
+  ok "Password saved (bcrypt hash in config.json)"
+}
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APP_DIR"
+
+case "${1:-}" in
+  -h|--help)
+    sed -n '3,15p' "$0" | sed 's/^# \?//'
+    exit 0 ;;
+  --password)
+    [ -x "$APP_DIR/venv/bin/python" ] || die "No venv yet — run ./setup.sh first."
+    step "Change dashboard password"
+    set_password
+    info "Takes effect immediately; no restart needed."
+    exit 0 ;;
+esac
 
 printf '\n%s┌────────────────────────────────────────┐\n' "$B$CYN"
 printf '│   ProxDeploy — installer               │\n'
@@ -266,11 +317,12 @@ else
   python3 -m venv "$APP_DIR/venv" || die "Could not create the virtualenv."
   ok "Created venv/"
 fi
-"$APP_DIR/venv/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1
-"$APP_DIR/venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt" \
-  || die "pip install failed. Run it by hand to see why:
-  $APP_DIR/venv/bin/pip install -r requirements.txt"
+install_requirements
 ok "Installed flask, bcrypt, requests"
+
+# --- 5a-bis. dashboard password ---
+step "Dashboard password"
+set_password
 
 # --- 5b. .env ---
 step "Writing .env"
@@ -309,6 +361,8 @@ CF_API_TOKEN=$CF_API_TOKEN
 CF_ZONE_ID=
 CF_TUNNEL_ID=$CF_TUNNEL_ID
 
+PORT=$DASH_PORT
+
 API_KEY=$API_KEY
 GITHUB_TOKEN=$GITHUB_TOKEN
 
@@ -330,6 +384,14 @@ for bin in nginx systemctl git chown rm; do
   if [ -n "$p" ]; then PATHS+=("$p"); info "$bin → $p"; else warn "Could not resolve '$bin'"; fi
 done
 [ ${#PATHS[@]} -eq 0 ] && die "Could not resolve any binary paths."
+
+# The "+ Domain" button edits /etc/cloudflared/config.yml through this root
+# helper, so the app never gets sudo on the tunnel config itself.
+HELPER=/usr/local/bin/proxdeploy-ingress
+backup "$HELPER"
+sudo install -m 0755 -o root -g root "$APP_DIR/proxdeploy-ingress" "$HELPER" \
+  && { PATHS+=("$HELPER"); ok "Installed $HELPER"; } \
+  || warn "Could not install $HELPER — the + Domain button won't be able to route new domains."
 
 SUDO_LINE="$RUN_USER ALL=(ALL) NOPASSWD: $(IFS=,; echo "${PATHS[*]}")"
 TMP_SUDO="$(mktemp)"
@@ -577,8 +639,8 @@ printf '└───────────────────────
 cat <<DONE
   ${B}1. Open the dashboard${R}
        https://$DASH_HOST
-     On your first visit you will ${B}set the dashboard password${R}. Choose a
-     strong one — anyone with it can run code on this machine.
+     Sign in with the password you just chose. Change it any time with:
+       ./setup.sh --password
 
   ${B}2. Install the CLI on your laptop${R} (optional)
        mkdir -p ~/.local/bin

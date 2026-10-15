@@ -15,11 +15,18 @@ HELP = """proxdeploy — manage your homelab sites from the terminal
 Usage:
   proxdeploy status                              list all deployed sites
   proxdeploy domains                             list domains available to deploy to
+  proxdeploy domain check <domain>               is a domain ready to connect? (read-only)
+  proxdeploy domain add   <domain> [zone_id]     connect a new domain to ProxDeploy
+  proxdeploy nodes                               list machines you can deploy to
   proxdeploy sysinfo                             show Pi CPU and RAM usage
   proxdeploy deploy <repo_url> <subdomain>       deploy a new site
-  proxdeploy deploy <repo_url> <subdomain> <port>  deploy a dynamic (reverse-proxy) site
+  proxdeploy deploy <repo_url> <subdomain> <port> [--service unit]
+                                                 deploy a dynamic (reverse-proxy) site
   proxdeploy update  <site>                      git pull + nginx reload
   proxdeploy restart <site>                      reload nginx (+ restart systemd service if set)
+  proxdeploy pause   <site>                      show the paused page (and stop its app service)
+  proxdeploy resume  <site>                      bring a paused site back
+  proxdeploy service <site> <unit|->             set the systemd unit Pause/Update act on ('-' clears it)
   proxdeploy delete  <site>                      remove site, nginx config, DNS record
   proxdeploy logs    <site>                      show last 200 log lines
   proxdeploy logs    <site> --errors             show errors/warnings only
@@ -33,8 +40,9 @@ Deploying to a second domain:
   proxdeploy deploy <repo> @    --domain example.org    -> example.org
 
 <site> is the bare name for sites on the default domain and the full hostname
-for everything else — `proxdeploy status` shows the exact name to use in the
-SITE column.
+for everything else — `proxdeploy status` shows the exact
+name to use in the SITE column.
+
 """
 
 
@@ -57,6 +65,7 @@ def ssh_api(cfg, method, path, payload=None):
     password = cfg.get("ssh_password", "")
     api_key = cfg["api_key"]
     port = cfg.get("ssh_port", "22")
+    dash_port = cfg.get("dashboard_port", "2096")
 
     data_flag = ""
     if payload is not None:
@@ -68,7 +77,7 @@ def ssh_api(cfg, method, path, payload=None):
         f"-H 'X-API-Key: {api_key}' "
         f"-H 'Content-Type: application/json' "
         f"{data_flag} "
-        f"http://localhost:2096{path}"
+        f"http://localhost:{dash_port}{path}"
     )
 
     # Use sshpass if a password is configured, otherwise rely on key-based auth
@@ -121,14 +130,27 @@ def cmd_status(args, cfg):
         return
     default_domain = cfg.get("default_domain", "")
     col = max(22, max(len(n) for n in result))
-    print(f"  {'SITE':<{col}} {'STATUS':<12} URL")
-    print(f"  {'-'*col} {'-'*12} {'-'*32}")
+    # Only show the NODE column once there is more than one node in play —
+    # on a single-Pi install it would be a column of identical "local".
+    nodes = {svc.get("node") or "local" for svc in result.values()}
+    show_node = len(nodes) > 1
+    ncol = max(6, max(len(n) for n in nodes)) if show_node else 0
+    head = f"  {'SITE':<{col}} {'STATUS':<12} "
+    rule = f"  {'-'*col} {'-'*12} "
+    if show_node:
+        head += f"{'NODE':<{ncol}} "
+        rule += f"{'-'*ncol} "
+    print(head + "URL")
+    print(rule + "-" * 32)
     for name, svc in sorted(result.items()):
         status = svc.get("status", "unknown")
         # The server resolves the hostname for us (older records have no
         # domain field, so never rebuild it from the key here).
         host = svc.get("fqdn") or (f"{name}.{default_domain}" if default_domain else name)
-        print(f"  {name:<{col}} {status:<12} https://{host}")
+        row = f"  {name:<{col}} {status:<12} "
+        if show_node:
+            row += f"{(svc.get('node') or 'local'):<{ncol}} "
+        print(row + f"https://{host}")
 
 
 def cmd_domains(args, cfg):
@@ -143,13 +165,57 @@ def cmd_domains(args, cfg):
             flags.append("NO ZONE ID — DNS disabled")
         if not d.get("apex_ready"):
             flags.append("no CF_TUNNEL_ID — can't deploy landing page")
+        # in_tunnel is absent on an older ProxDeploy — don't cry wolf then.
+        if d.get("in_tunnel") is False:
+            flags.append("not routed by the tunnel — sites here will 404")
         note = ("  (" + "; ".join(flags) + ")") if flags else ""
         print(f"  {d['name']}{note}")
 
 
+def cmd_domain(args, cfg):
+    """proxdeploy domain check|add <domain> [zone_id]
+
+    `check` is read-only and reports which of the three prerequisites hold;
+    `add` does the writes. Both take an optional zone ID for the rare case
+    where the automatic lookup finds the wrong zone."""
+    if len(args) < 2 or args[0] not in ("check", "add"):
+        print("usage: proxdeploy domain check|add <domain> [zone_id]")
+        sys.exit(1)
+
+    action, domain = args[0], args[1].strip().strip(".").lower()
+    payload = {"domain": domain}
+    if len(args) > 2:
+        payload["zone_id"] = args[2].strip().lower()
+
+    result = ssh_api(cfg, "POST", f"/api/domains/{action}", payload)
+    if not result:
+        return
+    if not result.get("ok"):
+        print(f"  {result.get('error')}")
+        sys.exit(1)
+
+    if action == "check":
+        if result.get("configured"):
+            print(f"  {domain} is already connected")
+        if result.get("error"):
+            print(f"  zone:   {result['error']}")
+        else:
+            print(f"  zone:   {result.get('zone_id')} ({result.get('zone_status')})")
+        print(f"  tunnel: {'routed' if result.get('in_tunnel') else 'NOT routed yet'}")
+        return
+
+    print(f"  {result.get('message')}")
+    print(f"  zone:   {result.get('zone_id')} ({result.get('zone_status')})")
+    print(f"  tunnel: {'routed' if result.get('in_tunnel') else 'NOT routed — see below'}")
+    for w in result.get("warnings", []):
+        print(f"  warn:   {w}")
+
+
 def cmd_deploy(args, cfg):
-    # proxdeploy deploy <repo> <subdomain|@> [port] [--domain X]
+    # proxdeploy deploy <repo> <subdomain|@> [port] [--domain X] [--node N]
     domain = None
+    node = None
+    service = None
     rest = []
     i = 0
     while i < len(args):
@@ -157,11 +223,20 @@ def cmd_deploy(args, cfg):
             domain = args[i + 1]
             i += 2
             continue
+        if args[i] == "--node" and i + 1 < len(args):
+            node = args[i + 1]
+            i += 2
+            continue
+        if args[i] == "--service" and i + 1 < len(args):
+            service = args[i + 1]
+            i += 2
+            continue
         rest.append(args[i])
         i += 1
 
     if len(rest) < 2:
-        print("Usage: proxdeploy deploy <repo_url> <subdomain> [port] [--domain example.com]")
+        print("Usage: proxdeploy deploy <repo_url> <subdomain> [port] "
+              "[--domain example.com]")
         print("       use '@' as the subdomain to deploy the domain's landing page")
         sys.exit(1)
 
@@ -170,8 +245,16 @@ def cmd_deploy(args, cfg):
     payload = {"repo_url": rest[0], "subdomain": subdomain}
     if domain:
         payload["domain"] = domain
+    if node:
+        payload["node"] = node
     if len(rest) >= 3:
         payload["port"] = rest[2]
+    if service:
+        # Without it, Pause only swaps the nginx page and the app keeps running
+        payload["service_name"] = service
+    elif len(rest) >= 3:
+        print("Note: no --service given, so Pause won't stop this app and Update won't restart it.")
+        print("      Set it later with: proxdeploy service <site> <unit>")
 
     result = ssh_api(cfg, "POST", "/api/deploy", payload)
     if result.get("ok"):
@@ -179,8 +262,8 @@ def cmd_deploy(args, cfg):
         # The log/site key is the bare name on the default domain, the full
         # hostname elsewhere — mirror the server's rule so the hint is right.
         default_domain = cfg.get("default_domain", "")
-        key = subdomain if not domain or domain == default_domain else \
-              (domain if not subdomain else f"{subdomain}.{domain}")
+        dom = domain or default_domain
+        key = (subdomain if dom == default_domain else f"{subdomain}.{dom}") if subdomain else dom
         print(f"  Watch: proxdeploy logs {key}")
     else:
         print(f"Error: {result.get('error')}")
@@ -213,6 +296,30 @@ def cmd_delete(args, cfg):
     else:
         print(f"Error: {result.get('error')}")
         sys.exit(1)
+
+
+def cmd_nodes(args, cfg):
+    result = ssh_api(cfg, "GET", "/api/nodes")
+    nodes = result.get("nodes") or []
+    if not nodes:
+        print("No nodes configured.")
+        return
+    col = max(8, max(len(n["name"]) for n in nodes))
+    print(f"  {'NODE':<{col}} {'STATE':<12} {'SITES':<7} DETAIL")
+    print(f"  {'-'*col} {'-'*12} {'-'*7} {'-'*40}")
+    for n in nodes:
+        state = "up" if n.get("online") else "DOWN"
+        if n.get("local"):
+            state = "controller"
+        detail = n.get("error") or n.get("url") or "this Pi"
+        si = n.get("sysinfo")
+        if si:
+            detail = (f"CPU {si['cpu_percent']:.0f}%  "
+                      f"RAM {si['ram_used_mb']}/{si['ram_total_mb']} MB  "
+                      f"Disk {si['disk_used_mb']}/{si['disk_total_mb']} MB")
+        print(f"  {n['name']:<{col}} {state:<12} {n.get('sites', 0):<7} {detail}")
+    print()
+    print("  Deploy to one with:  proxdeploy deploy <repo> <site> --node <name>")
 
 
 def cmd_sysinfo(args, cfg):
@@ -278,6 +385,8 @@ def cmd_setup(_args):
     ssh_user = prompt("Pi SSH user", "ssh_user", "pi")
     ssh_password = prompt("Pi SSH password (leave blank to use SSH key)", "ssh_password", secret=True)
     ssh_port = prompt("Pi SSH port", "ssh_port", "22")
+    dashboard_port = prompt("ProxDeploy port on the Pi (PORT in the server .env)",
+                            "dashboard_port", "2096")
     default_domain = prompt("Default domain (must match DOMAIN in the server .env)",
                             "default_domain", "example.com")
     api_key = prompt("ProxDeploy API key", "api_key", secret=True)
@@ -292,6 +401,7 @@ def cmd_setup(_args):
         "ssh_user": ssh_user,
         "ssh_password": ssh_password,
         "ssh_port": ssh_port,
+        "dashboard_port": dashboard_port,
         "default_domain": default_domain,
         "api_key": api_key,
     }
@@ -302,15 +412,47 @@ def cmd_setup(_args):
     print("Test it: proxdeploy status")
 
 
+def _simple(path, usage):
+    def run(args, cfg):
+        if not args:
+            print(f"Usage: proxdeploy {usage} <site>")
+            sys.exit(1)
+        result = ssh_api(cfg, "POST", path, {"subdomain": args[0]})
+        if result.get("ok"):
+            print(result.get("message"))
+        else:
+            print(f"Error: {result.get('error')}")
+            sys.exit(1)
+    return run
+
+
+def cmd_service(args, cfg):
+    if len(args) < 2:
+        print("Usage: proxdeploy service <site> <unit>   ('-' clears it)")
+        sys.exit(1)
+    unit = "" if args[1] == "-" else args[1].removesuffix(".service")
+    result = ssh_api(cfg, "POST", "/api/edit", {"subdomain": args[0], "service_name": unit})
+    if result.get("ok"):
+        print(result.get("message"))
+    else:
+        print(f"Error: {result.get('error')}")
+        sys.exit(1)
+
+
 COMMANDS = {
     "status":  cmd_status,
     "domains": cmd_domains,
+    "domain":  cmd_domain,
+    "nodes":   cmd_nodes,
     "sysinfo": cmd_sysinfo,
     "deploy":  cmd_deploy,
     "update":  cmd_update,
     "restart": cmd_restart,
     "delete":  cmd_delete,
     "logs":    cmd_logs,
+    "pause":   _simple("/api/pause", "pause"),
+    "resume":  _simple("/api/resume", "resume"),
+    "service": cmd_service,
 }
 
 

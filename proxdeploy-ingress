@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""proxdeploy-ingress — route a domain through the Cloudflare Tunnel.
+
+/etc/cloudflared/config.yml is root-owned, and it is the single most dangerous
+file on the Pi: a malformed ingress list doesn't break the domain you were
+adding, it takes every site offline at once. So ProxDeploy doesn't get sudo on
+the file. It gets sudo on this, which accepts exactly one domain name,
+validates it, keeps a timestamped backup, and refuses to install a config that
+cloudflared can't parse.
+
+Install (as root):
+    cp proxdeploy-ingress /usr/local/bin/proxdeploy-ingress
+    chown root:root /usr/local/bin/proxdeploy-ingress
+    chmod 755 /usr/local/bin/proxdeploy-ingress
+    visudo -f /etc/sudoers.d/proxdeploy    # add the NOPASSWD line for it
+
+Usage:
+    proxdeploy-ingress add <domain>    route <domain> and *.<domain>
+    proxdeploy-ingress list            print the hostnames currently routed
+    proxdeploy-ingress check <domain>  exit 0 if both hostnames are routed
+
+`add` is idempotent: a domain already routed is a success, not an error, so a
+retried request can't append duplicates. It does NOT restart cloudflared —
+ProxDeploy does that itself, and keeping the restart out of here means the
+file edit can be verified before anything user-facing is bounced.
+"""
+
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime
+
+CONFIG      = os.environ.get("CF_TUNNEL_CONFIG", "/etc/cloudflared/config.yml")
+# The .deb installs to /usr/bin, the GitHub binary usually to /usr/local/bin.
+# Fixed paths only, never $PATH: this runs as root.
+CLOUDFLARED = next((p for p in ("/usr/local/bin/cloudflared", "/usr/bin/cloudflared")
+                    if os.path.exists(p)), "/usr/local/bin/cloudflared")
+SERVICE     = "http://localhost:80"
+
+# Same shape ProxDeploy validates against — two labels or more, no leading or
+# trailing hyphen. Re-checked here because this runs as root and must not
+# trust its caller.
+DOMAIN_RE = re.compile(r'^(?!-)[a-z0-9\-]{1,63}(?<!-)(\.(?!-)[a-z0-9\-]{1,63}(?<!-))+$')
+
+# The catch-all every ingress list must end with. New rules go immediately
+# above it — cloudflared matches top to bottom, so anything below never runs.
+CATCHALL_RE = re.compile(r'^\s*-\s*service:\s*http_status:404\s*$')
+HOSTNAME_RE = re.compile(r'^\s*-\s*hostname:\s*(\S+)\s*$')
+
+
+def die(msg, code=1):
+    print(f"proxdeploy-ingress: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def read_config():
+    try:
+        with open(CONFIG) as f:
+            return f.read().splitlines()
+    except OSError as e:
+        die(f"can't read {CONFIG}: {e}")
+
+
+def routed_hostnames(lines):
+    return {m.group(1).strip('"\'').lower()
+            for m in (HOSTNAME_RE.match(l) for l in lines) if m}
+
+
+def valid_domain(domain):
+    return bool(domain) and len(domain) <= 253 and bool(DOMAIN_RE.match(domain))
+
+
+def cloudflared_accepts(path):
+    """Ask cloudflared itself whether the file parses. Cheaper than being
+    wrong about YAML, and it also catches rules it considers unreachable."""
+    if not os.path.exists(CLOUDFLARED):
+        return True, f"{CLOUDFLARED} not found — skipped validation"
+    try:
+        r = subprocess.run(
+            [CLOUDFLARED, "tunnel", "--config", path, "ingress", "validate"],
+            capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        return False, f"validation could not run: {e}"
+    return r.returncode == 0, (r.stdout + r.stderr).strip()
+
+
+def cmd_add(domain):
+    if not valid_domain(domain):
+        die(f"{domain!r} is not a valid domain name")
+
+    lines    = read_config()
+    routed   = routed_hostnames(lines)
+    wildcard = f"*.{domain}"
+    missing  = [h for h in (domain, wildcard) if h not in routed]
+    if not missing:
+        print(f"{domain} and {wildcard} are already routed")
+        return
+
+    idx = next((i for i, l in enumerate(lines) if CATCHALL_RE.match(l)), None)
+    if idx is None:
+        die("no `- service: http_status:404` catch-all found — refusing to "
+            "guess where new rules belong")
+
+    # Match the indentation already in use rather than assuming two spaces.
+    indent = lines[idx][:len(lines[idx]) - len(lines[idx].lstrip())]
+    new = []
+    for host in missing:
+        # A wildcard is a YAML alias character at the start of a scalar, so it
+        # has to be quoted. Quoting both is harmless and keeps the file uniform.
+        new.append(f'{indent}- hostname: "{host}"')
+        new.append(f'{indent}  service: {SERVICE}')
+    lines[idx:idx] = new
+
+    tmp = f"{CONFIG}.new"
+    body = "\n".join(lines) + "\n"
+    with open(tmp, "w") as f:
+        f.write(body)
+    os.chmod(tmp, os.stat(CONFIG).st_mode & 0o777)
+
+    ok, out = cloudflared_accepts(tmp)
+    if not ok:
+        os.unlink(tmp)
+        die(f"cloudflared rejected the new config, nothing changed:\n{out}")
+
+    stamp  = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = f"{CONFIG}.bak-{stamp}"
+    with open(CONFIG) as src, open(backup, "w") as dst:
+        dst.write(src.read())
+    os.replace(tmp, CONFIG)
+
+    print(f"routed {', '.join(missing)} (backup: {backup})")
+    print("restart cloudflared to pick it up")
+
+
+def cmd_list():
+    for host in sorted(routed_hostnames(read_config())):
+        print(host)
+
+
+def cmd_check(domain):
+    if not valid_domain(domain):
+        die(f"{domain!r} is not a valid domain name")
+    routed = routed_hostnames(read_config())
+    if domain in routed and f"*.{domain}" in routed:
+        print(f"{domain} is routed")
+        return
+    sys.exit(1)
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        die("usage: proxdeploy-ingress add <domain> | list | check <domain>", 2)
+    action, rest = args[0], args[1:]
+    if action == "add" and len(rest) == 1:
+        cmd_add(rest[0].strip().strip(".").lower())
+    elif action == "list" and not rest:
+        cmd_list()
+    elif action == "check" and len(rest) == 1:
+        cmd_check(rest[0].strip().strip(".").lower())
+    else:
+        die("usage: proxdeploy-ingress add <domain> | list | check <domain>", 2)
+
+
+if __name__ == "__main__":
+    main()
